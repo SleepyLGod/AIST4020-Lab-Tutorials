@@ -143,6 +143,24 @@ shared.CallRecordChecks = PairCallChecks
 class PairPresentationChecks(shared.PresentationChecks):
     """Adapt displays to the single-query teaching sequence."""
 
+    def test_candidate_view_retains_full_diff_and_escapes_stored_text(self) -> None:
+        original = {'operations': [{'name': 'sentiment', 'type': 'map', 'prompt': 'Old question'}]}
+        for name in ('sentiment', 'renamed-operation'):
+            changed = {'operations': [{'name': name, 'type': 'map',
+                                      'prompt': 'New question\n<script>test-only</script>'}]}
+            record = {'initial_config': original, 'plans': [
+                {'id': 'baseline', 'config': original, 'outputs': []},
+                {'id': 'candidate', 'config': changed, 'outputs': []}]}
+            displayed = []
+            with patch('IPython.display.display', side_effect=displayed.append), redirect_stdout(io.StringIO()):
+                support.show_candidate_change(record, 'candidate', [], {}, {})
+            details = displayed[0].data
+            self.assertIn('Full query configuration difference', details)
+            self.assertIn('&lt;script&gt;test-only&lt;/script&gt;', details)
+            self.assertNotIn('<script>', details)
+            self.assertIn('Old question', details)
+            self.assertTrue(details.startswith('<details>' if name == 'sentiment' else '<details open>'))
+
     def test_inspection_shows_compact_decision_and_full_escaped_call(self) -> None:
         import html
         inputs = [{'id': 'film', 'reviewId': str(i), 'reviewText': f'<script>fixture {i}</script>'}
@@ -623,6 +641,99 @@ class QuerySpineChecks(unittest.TestCase):
         self.assertFalse(namespace['RUN_HELD_OUT_TEST'])
 
 
+class CaseLectureChecks(unittest.TestCase):
+    """Test examples and plots against data, without executing any query."""
+
+    def setUp(self) -> None:
+        import matplotlib
+        matplotlib.use('Agg')
+        self.inputs = [{'id': 'film', 'reviewId': str(i), 'reviewText': f'<script>review {i}</script>'}
+                       for i in range(3)]
+        self.keys = [support.review_key(row) for row in self.inputs]
+        self.reference = dict(zip(self.keys, ['POSITIVE', 'NEGATIVE', 'POSITIVE']))
+        self.labels = [{**row, 'sentiment': self.reference[support.review_key(row)]} for row in self.inputs]
+        self.pair = (self.keys[0], self.keys[1])
+
+    def tearDown(self) -> None:
+        import matplotlib.pyplot as plt
+        plt.close('all')
+
+    def test_pair_example_prefers_difference_then_shared_then_empty(self) -> None:
+        reverse = tuple(reversed(self.pair))
+        self.assertEqual(support.choose_example_pair({self.pair, reverse}, {reverse}), self.pair)
+        self.assertEqual(support.choose_example_pair({self.pair}, {self.pair}), self.pair)
+        self.assertIsNone(support.choose_example_pair(set(), set()))
+        for a, b, phrase in [({self.pair}, set(), 'disagree'),
+                              ({self.pair}, {self.pair}, 'agree'), (set(), set(), 'no pairs')]:
+            rendered = []
+            with patch('IPython.display.display', side_effect=rendered.append), redirect_stdout(io.StringIO()) as out:
+                support.explain_pair(self.inputs, self.labels, a, b, self.reference, {'film': 'Film'})
+            self.assertIn(phrase, out.getvalue())
+            for value in rendered:
+                self.assertNotIn('<script>', value.data)
+
+    def test_matrices_preserve_direction_and_exclude_diagonal(self) -> None:
+        matrix = support.pair_matrix(self.inputs, {self.pair})
+        self.assertEqual(matrix, [[-1, 1, 0], [0, -1, 0], [0, 0, -1]])
+        with self.assertRaises(ValueError):
+            support.pair_matrix(self.inputs, {(self.keys[0], self.keys[0])})
+        fig = support.plot_pair_matrices(self.inputs, {self.pair}, set(), {self.pair})
+        self.assertEqual(fig.axes[0].images[0].get_array().tolist(), matrix)
+        self.assertEqual(fig.axes[1].images[0].get_array().tolist(), support.pair_matrix(self.inputs, set()))
+        fig.canvas.draw()
+
+    def test_work_plots_use_measured_values_without_counting_totals(self) -> None:
+        usage = {'model': {'prompt_tokens': 100, 'completion_tokens': 10, 'cached_tokens': 70, 'total_tokens': 110}}
+        self.assertEqual(support.measured_tokens(usage, 'prompt_tokens'), 100)
+        self.assertEqual(support.measured_tokens(usage, 'completion_tokens'), 10)
+        for invalid in (None, {}, {'model': {}}, {'model': {'prompt_tokens': -1}},
+                        {'model': {'prompt_tokens': float('nan')}}, {'model': {'prompt_tokens': True}}):
+            self.assertIsNone(support.measured_tokens(invalid, 'prompt_tokens'))
+        a = {'elapsed_seconds': 2, 'token_usage': usage}
+        b = {'elapsed_seconds': 1, 'python_pairing_seconds': 0.2, 'token_usage': None}
+        fig = support.plot_work_comparison(a, b)
+        self.assertEqual([bar.get_height() for bar in fig.axes[0].patches], [2, 1.2])
+        self.assertEqual([bar.get_height() for bar in fig.axes[1].patches], [100])
+        self.assertIn('Unknown', [text.get_text() for text in fig.axes[1].texts])
+        fig.canvas.draw()
+
+    def record(self) -> dict:
+        original = {'operations': [{'name': 'sentiment', 'type': 'map', 'prompt': 'Original'}]}
+        return {'initial_config': original, 'plans': [
+            {'id': 'baseline', 'config': original, 'outputs': self.labels},
+            {'id': 'incomplete', 'config': {'operations': []}, 'outputs': self.labels[:1]},
+            {'id': 'first', 'config': {'operations': [{'name': 'sentiment', 'type': 'map', 'prompt': 'First'}]},
+             'outputs': self.labels, 'score': 0.2},
+            {'id': 'higher', 'config': {'operations': [{'name': 'sentiment', 'type': 'map', 'prompt': 'Higher'}]},
+             'outputs': self.labels, 'score': 1.0}]}
+
+    def test_candidate_default_uses_record_order_not_score(self) -> None:
+        record = self.record()
+        self.assertEqual(support.first_comparable_candidate(record, self.inputs, self.reference), 'first')
+        self.assertIsNone(support.first_comparable_candidate(None, self.inputs, self.reference))
+        record['plans'] = record['plans'][:2]
+        self.assertIsNone(support.first_comparable_candidate(record, self.inputs, self.reference))
+        record['plans'] = record['plans'][:1]
+        self.assertIsNone(support.first_comparable_candidate(record, self.inputs, self.reference))
+
+    def test_candidate_view_handles_unchanged_and_incomplete_predictions(self) -> None:
+        for plan, message in [('first', 'none of these sentiment labels changed'),
+                               ('incomplete', 'Cannot compare complete predictions')]:
+            with patch('IPython.display.display'), redirect_stdout(io.StringIO()) as out:
+                support.show_candidate_change(self.record(), plan, self.inputs, self.reference, {'film': 'Film'})
+            self.assertIn(message, out.getvalue())
+
+    def test_lecture_order_and_short_plot_calls(self) -> None:
+        tags = [tag for c in NB.cells for tag in c.metadata.get('tags', [])]
+        self.assertLess(tags.index('pair_example_before_scores'), tags.index('pair_metrics'))
+        self.assertLess(tags.index('moar_candidate_diff'), tags.index('moar_candidate_table'))
+        for tag in ('plan_diagram', 'pair_matrix_display', 'work_charts'):
+            self.assertNotIn('run_query', notebook_cell(tag))
+            self.assertNotIn('plt.subplots', notebook_cell(tag))
+        fig = support.plot_execution_plans(8)
+        fig.canvas.draw()
+
+
 def load_tests(loader: unittest.TestLoader, tests: unittest.TestSuite,
                pattern: str | None) -> unittest.TestSuite:
     """Run shared behavior tests against the copy, then its scope checks."""
@@ -631,6 +742,7 @@ def load_tests(loader: unittest.TestLoader, tests: unittest.TestSuite,
         loader.loadTestsFromTestCase(StreamlinedChecks),
         loader.loadTestsFromTestCase(SupportChecks),
         loader.loadTestsFromTestCase(QuerySpineChecks),
+        loader.loadTestsFromTestCase(CaseLectureChecks),
     ])
 
 

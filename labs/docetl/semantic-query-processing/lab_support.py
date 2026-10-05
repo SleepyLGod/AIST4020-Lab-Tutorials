@@ -369,6 +369,187 @@ def show_pairs(pairs: set, index: dict, titles: dict, limit: int = 3) -> None:
         show_reviews([index[left], index[right]], titles)
 
 
+def choose_example_pair(pairs_a: set, pairs_b: set) -> tuple | None:
+    """Prefer a disagreement, then a shared pair; never manufacture an example."""
+    choices = sorted(pairs_a ^ pairs_b) or sorted(pairs_a & pairs_b)
+    return choices[0] if choices else None
+
+
+def explain_pair(inputs: list[dict], labels: list[dict], pairs_a: set,
+                 pairs_b: set, reference: dict, titles: dict) -> None:
+    """Read one pair before introducing aggregate quality scores."""
+    pair = choose_example_pair(pairs_a, pairs_b)
+    if pair is None:
+        print('Both methods returned no pairs. Next, check whether the reference contains any.')
+        return
+    indexed, validation = index_inputs(inputs), validate_labels(inputs, labels)
+    if not validation['complete']:
+        raise ValueError('Complete valid Method B labels are required to explain a pair.')
+    predicted = validation['returned']
+    print('A pair on which the methods disagree:' if pairs_a != pairs_b
+          else 'The methods agree. Read one shared pair:')
+    show_reviews([indexed[key] for key in pair], titles)
+    for side, key in zip(('Left', 'Right'), pair):
+        print(f'{side}: Method B says {predicted[key]["sentiment"]}; reference says {reference[key]}.')
+    different = predicted[pair[0]]['sentiment'] != predicted[pair[1]]['sentiment']
+    print(f'Method A {"kept" if pair in pairs_a else "left out"} this pair.')
+    print(f'Method B {"kept" if pair in pairs_b else "left out"} it because its labels are '
+          f'{"different" if different else "the same"}.')
+    print('The reference labels describe opposite opinions.' if reference[pair[0]] != reference[pair[1]]
+          else 'The reference labels describe the same overall attitude.')
+
+
+def plot_execution_plans(review_count: int) -> Any:
+    """Draw the two teaching plans, separating model work from ordinary code."""
+    import matplotlib.pyplot as plt
+    from matplotlib.patches import Patch
+    fig, ax = plt.subplots(figsize=(11, 3.7), layout='constrained')
+    ax.set(xlim=(-0.6, 3.6), ylim=(-0.65, 1.55))
+    ax.axis('off')
+    rows = [
+        ('A', [f'{review_count} reviews', 'Build eligible\nordered pairs',
+               'Model judges\neach pair', 'Keep matching\npairs']),
+        ('B', [f'{review_count} reviews', 'Model labels\neach review',
+               'Python pairs\nopposite labels', 'Return matching\npairs']),
+    ]
+    for y, (name, steps) in zip((1, 0), rows):
+        ax.text(-0.48, y, f'Method {name}', ha='center', va='center', fontsize=10)
+        for x, label in enumerate(steps):
+            model_step = (name == 'A' and x == 2) or (name == 'B' and x == 1)
+            ax.text(x, y, label, ha='center', va='center', fontsize=10,
+                    bbox={'boxstyle': 'round,pad=0.5', 'facecolor': '#d8eee9' if model_step else '#eeeeee',
+                          'edgecolor': '#46796d' if model_step else '#777777'})
+            if x < 3:
+                ax.annotate('', xy=(x + 0.66, y), xytext=(x + 0.34, y),
+                            arrowprops={'arrowstyle': '->', 'color': '#444444'})
+    ax.legend(handles=[Patch(facecolor='#d8eee9', label='Model judgment'),
+                       Patch(facecolor='#eeeeee', label='Data / ordinary code')],
+              loc='upper center', ncol=2, frameon=False)
+    ax.set_title('One question, two ways to process the reviews', pad=12)
+    return fig
+
+
+def pair_matrix(inputs: list[dict], pairs: set) -> list[list[int]]:
+    """Encode ordered pairs as 1, absent pairs as 0, and self-pairs as -1."""
+    keys = list(index_inputs(inputs))
+    eligible = {(a, b) for a in keys for b in keys if a != b and a[0] == b[0]}
+    if not pairs <= eligible:
+        raise ValueError('Matrix contains an unknown, cross-movie, or self pair.')
+    return [[-1 if a == b else int((a, b) in pairs) for b in keys] for a in keys]
+
+
+def plot_pair_matrices(inputs: list[dict], expected: set, pairs_a: set, pairs_b: set) -> Any:
+    """Plot reference and measured pair sets on the same axes and color scale."""
+    import matplotlib.pyplot as plt
+    from matplotlib.colors import BoundaryNorm, ListedColormap
+    from matplotlib.patches import Patch
+    fig, axes = plt.subplots(1, 3, figsize=(10, 4.3), layout='constrained')
+    labels = [f'R{i + 1}' for i in range(len(inputs))]
+    colors = ['#c9c9c9', '#ffffff', '#397b70']
+    for ax, name, pairs in zip(axes, ('Reference', 'Method A', 'Method B'), (expected, pairs_a, pairs_b)):
+        ax.imshow(pair_matrix(inputs, pairs), cmap=ListedColormap(colors),
+                  norm=BoundaryNorm([-1.5, -0.5, 0.5, 1.5], 3))
+        ax.set(xticks=range(len(inputs)), yticks=range(len(inputs)), xticklabels=labels,
+               yticklabels=labels, xlabel='Right review', ylabel='Left review', title=name)
+        ax.tick_params(labelsize=8)
+    fig.suptitle('Each colored square is one returned ordered pair')
+    axes[1].legend(handles=[Patch(facecolor=c, edgecolor='#777777', label=t)
+                           for c, t in zip(colors, ('Self-pair excluded', 'Not returned', 'Returned'))],
+                   loc='upper center', bbox_to_anchor=(0.5, -0.22), ncol=3, frameon=False)
+    return fig
+
+
+def measured_tokens(usage: object, field: str) -> float | None:
+    """Sum one DocETL per-model token field without adding totals or cached subsets."""
+    import math
+    if not isinstance(usage, dict) or not usage:
+        return None
+    values = [item.get(field) if isinstance(item, dict) else None for item in usage.values()]
+    if any(isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v) or v < 0
+           for v in values):
+        return None
+    return sum(values)
+
+
+def plot_work_comparison(method_a: dict, method_b: dict) -> Any:
+    """Display measured query time and input/output tokens; leave unknowns unplotted."""
+    import math
+    import matplotlib.pyplot as plt
+    records = (method_a, method_b)
+    times = [r.get('elapsed_seconds') for r in records]
+    times = [t + r.get('python_pairing_seconds', 0.0) if isinstance(t, (int, float)) else None
+             for t, r in zip(times, records)]
+    columns = [('Query + pairing time', 'Seconds', times),
+               ('Input tokens', 'Tokens', [measured_tokens(r.get('token_usage'), 'prompt_tokens') for r in records]),
+               ('Output tokens', 'Tokens', [measured_tokens(r.get('token_usage'), 'completion_tokens') for r in records])]
+    fig, axes = plt.subplots(1, 3, figsize=(10, 3.4), layout='constrained')
+    for ax, (title, unit, values) in zip(axes, columns):
+        valid = [(i, value) for i, value in enumerate(values)
+                 if not isinstance(value, bool) and isinstance(value, (int, float))
+                 and math.isfinite(value) and value >= 0]
+        for i, value in valid:
+            ax.bar(i, value, width=0.55, color=('#397b70', '#be7242')[i])
+            ax.annotate(f'{value:,.2f}' if unit == 'Seconds' else f'{value:,.0f}',
+                        (i, value), xytext=(0, 5), textcoords='offset points', ha='center', fontsize=9)
+        for i in set(range(2)) - {i for i, _ in valid}:
+            ax.text(i, 0.08, 'Unknown', transform=ax.get_xaxis_transform(), ha='center')
+        high = max((value for _, value in valid), default=0)
+        ax.set(xticks=[0, 1], xticklabels=['A', 'B'], xlim=(-0.6, 1.6),
+               ylim=(0, high * 1.25 if high else 1), title=title, ylabel=unit)
+    return fig
+
+
+def first_comparable_candidate(record: dict | None, inputs: list[dict], expected: dict) -> str | None:
+    """Select the first comparable non-baseline in record order, never by score."""
+    if record is None:
+        return None
+    baseline = find_baseline(record)
+    project_candidate_labels(inputs, baseline['outputs'])
+    for plan in record['plans']:
+        if plan['id'] == baseline['id']:
+            continue
+        try:
+            prediction_changes(inputs, baseline['outputs'], plan['outputs'], expected)
+        except ValueError:
+            continue
+        return plan['id']
+    return None
+
+
+def show_candidate_change(record: dict, plan_id: str, inputs: list[dict], expected: dict,
+                          titles: dict) -> None:
+    """Show an actual rewrite and one changed review before aggregate scores."""
+    import difflib
+    import yaml
+    from IPython.display import HTML, display
+    lookup = {plan['id']: plan for plan in record['plans']}
+    if plan_id not in lookup:
+        raise ValueError('Choose a candidate ID from this run.')
+    plan = lookup[plan_id]
+    summary = operation_changes(record['initial_config'], plan['config'])
+    print(f'Inspecting {plan_id}. This display is not a recommendation to adopt it.')
+    print(summary if summary is not None else 'The operation structure changed; read the full configuration difference.')
+    before = yaml.safe_dump(record['initial_config'], sort_keys=False).splitlines()
+    after = yaml.safe_dump(plan['config'], sort_keys=False).splitlines()
+    diff = '\n'.join(difflib.unified_diff(before, after, fromfile='Initial query', tofile=plan_id, lineterm=''))
+    display(HTML(text_details('Full query configuration difference', diff or 'No differences.', expanded=summary is None)))
+    try:
+        baseline = find_baseline(record)
+        changes = prediction_changes(inputs, baseline['outputs'], plan['outputs'], expected)
+    except ValueError as error:
+        print(f'Cannot compare complete predictions: {error}')
+        return
+    print(f'{len(changes)} labels changed from the recorded baseline.')
+    if changes:
+        change = changes[0]
+        row = index_inputs(inputs)[(change['Movie ID'], change['reviewId'])]
+        show_reviews([row], titles)
+        print(f'Before: {change["Before"]}; after: {change["After"]}; reference: {change["Reference"]}.')
+        display(HTML(text_details('All changed predictions', json.dumps(changes, ensure_ascii=False, indent=2))))
+    else:
+        print('The query changed, but none of these sentiment labels changed.')
+
+
 def run_logged(command: list[str], log_path: Path, *, timeout: int,
                cwd: Path | None = None) -> None:
     """Keep routine output in a log; propagate failures with its location."""
