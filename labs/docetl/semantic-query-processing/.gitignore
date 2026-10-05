@@ -1,0 +1,4 @@
+# Runtime outputs stay local; the attributed teaching data is tracked.
+/runs/
+/.ipynb_checkpoints/
+__pycache__/

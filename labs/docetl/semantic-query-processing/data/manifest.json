@@ -1,0 +1,457 @@
+{
+  "distribution": "Teaching subset distributed under the upstream dataset's stated CC0-1.0 terms; see DATA_SOURCES.md.",
+  "format_version": 1,
+  "license": {
+    "license_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+    "scope": "Upstream publisher's declaration; third-party review rights have not been independently audited.",
+    "upstream_declared_license": "CC0-1.0",
+    "verification": "Kaggle public dataset API lists CC0: Public Domain for andrezaza/clapper-massive-rotten-tomatoes-movies-and-reviews.",
+    "verified_on": "2026-10-05"
+  },
+  "movies": {
+    "ant_man_and_the_wasp_quantumania": "Ant-Man and The Wasp: Quantumania",
+    "taken_3": "Taken 3"
+  },
+  "origin": {
+    "dataset": "SemBench movie scenario, sf_2000, adapted for teaching",
+    "scenario": "files/movie/data/sf_2000",
+    "source_sha256": {
+      "Movies.csv": "aac26cb7cdbc771a8a42bf6a9dde869c25ebdbce7dbb97c2be4818bcdf31bea5",
+      "Reviews.csv": "df231cfb189c9e169aa6afe415e4fa24533b04499179bbd61416c4c6af28ca21"
+    },
+    "upstream": "https://www.kaggle.com/datasets/andrezaza/clapper-massive-rotten-tomatoes-movies-and-reviews"
+  },
+  "preparation": {
+    "deduplication": "(id, reviewId); conflicting raw text or label is an error",
+    "input_fields": [
+      "id",
+      "reviewId",
+      "reviewText"
+    ],
+    "order": "SHA-256(4020|movie_id|review_id), ascending within each movie/label",
+    "quotas_per_split": {
+      "ant_man_and_the_wasp_quantumania": {
+        "NEGATIVE": 8,
+        "POSITIVE": 8
+      },
+      "taken_3": {
+        "NEGATIVE": 12,
+        "POSITIVE": 4
+      }
+    },
+    "split_order": [
+      "demo",
+      "optimization",
+      "test"
+    ],
+    "text_transform": "html.unescape followed by strip; no model rewriting"
+  },
+  "selection": {
+    "demo": [
+      [
+        "ant_man_and_the_wasp_quantumania",
+        "102781334"
+      ],
+      [
+        "taken_3",
+        "2241639"
+      ],
+      [
+        "taken_3",
+        "2241409"
+      ],
+      [
+        "taken_3",
+        "2241599"
+      ],
+      [
+        "ant_man_and_the_wasp_quantumania",
+        "102779975"
+      ],
+      [
+        "taken_3",
+        "2241860"
+      ],
+      [
+        "ant_man_and_the_wasp_quantumania",
+        "102779524"
+      ],
+      [
+        "ant_man_and_the_wasp_quantumania",
+        "102780388"
+      ],
+      [
+        "taken_3",
+        "2241760"
+      ],
+      [
+        "taken_3",
+        "2241515"
+      ],
+      [
+        "ant_man_and_the_wasp_quantumania",
+        "102781954"
+      ],
+      [
+        "ant_man_and_the_wasp_quantumania",
+        "102780491"
+      ],
+      [
+        "ant_man_and_the_wasp_quantumania",
+        "102784591"
+      ],
+      [
+        "ant_man_and_the_wasp_quantumania",
+        "102780416"
+      ],
+      [
+        "taken_3",
+        "2472790"
+      ],
+      [
+        "ant_man_and_the_wasp_quantumania",
+        "102783393"
+      ],
+      [
+        "ant_man_and_the_wasp_quantumania",
+        "102781076"
+      ],
+      [
+        "taken_3",
+        "2261673"
+      ],
+      [
+        "taken_3",
+        "2241651"
+      ],
+      [
+        "taken_3",
+        "2690384"
+      ],
+      [
+        "taken_3",
+        "2241626"
+      ],
+      [
+        "ant_man_and_the_wasp_quantumania",
+        "102780758"
+      ],
+      [
+        "ant_man_and_the_wasp_quantumania",
+        "102782182"
+      ],
+      [
+        "ant_man_and_the_wasp_quantumania",
+        "102780916"
+      ],
+      [
+        "taken_3",
+        "2241158"
+      ],
+      [
+        "ant_man_and_the_wasp_quantumania",
+        "102779597"
+      ],
+      [
+        "taken_3",
+        "2241827"
+      ],
+      [
+        "ant_man_and_the_wasp_quantumania",
+        "102779616"
+      ],
+      [
+        "ant_man_and_the_wasp_quantumania",
+        "102780888"
+      ],
+      [
+        "taken_3",
+        "2323318"
+      ],
+      [
+        "taken_3",
+        "2241826"
+      ],
+      [
+        "taken_3",
+        "2321621"
+      ]
+    ],
+    "optimization": [
+      [
+        "taken_3",
+        "2241553"
+      ],
+      [
+        "ant_man_and_the_wasp_quantumania",
+        "102780792"
+      ],
+      [
+        "taken_3",
+        "2241491"
+      ],
+      [
+        "taken_3",
+        "2242765"
+      ],
+      [
+        "taken_3",
+        "2242045"
+      ],
+      [
+        "ant_man_and_the_wasp_quantumania",
+        "102779604"
+      ],
+      [
+        "taken_3",
+        "2531074"
+      ],
+      [
+        "taken_3",
+        "2411103"
+      ],
+      [
+        "taken_3",
+        "2240884"
+      ],
+      [
+        "taken_3",
+        "2241797"
+      ],
+      [
+        "ant_man_and_the_wasp_quantumania",
+        "102779984"
+      ],
+      [
+        "ant_man_and_the_wasp_quantumania",
+        "102781057"
+      ],
+      [
+        "ant_man_and_the_wasp_quantumania",
+        "102780028"
+      ],
+      [
+        "taken_3",
+        "2427175"
+      ],
+      [
+        "taken_3",
+        "2241268"
+      ],
+      [
+        "ant_man_and_the_wasp_quantumania",
+        "102780543"
+      ],
+      [
+        "ant_man_and_the_wasp_quantumania",
+        "102782426"
+      ],
+      [
+        "taken_3",
+        "2301743"
+      ],
+      [
+        "ant_man_and_the_wasp_quantumania",
+        "102779519"
+      ],
+      [
+        "ant_man_and_the_wasp_quantumania",
+        "102781374"
+      ],
+      [
+        "taken_3",
+        "2241644"
+      ],
+      [
+        "ant_man_and_the_wasp_quantumania",
+        "102780948"
+      ],
+      [
+        "ant_man_and_the_wasp_quantumania",
+        "102783315"
+      ],
+      [
+        "ant_man_and_the_wasp_quantumania",
+        "102780845"
+      ],
+      [
+        "ant_man_and_the_wasp_quantumania",
+        "102782018"
+      ],
+      [
+        "ant_man_and_the_wasp_quantumania",
+        "102781074"
+      ],
+      [
+        "ant_man_and_the_wasp_quantumania",
+        "102779531"
+      ],
+      [
+        "ant_man_and_the_wasp_quantumania",
+        "102779501"
+      ],
+      [
+        "taken_3",
+        "2241669"
+      ],
+      [
+        "taken_3",
+        "2241270"
+      ],
+      [
+        "taken_3",
+        "2301741"
+      ],
+      [
+        "taken_3",
+        "2527493"
+      ]
+    ],
+    "test": [
+      [
+        "taken_3",
+        "2241655"
+      ],
+      [
+        "taken_3",
+        "2241618"
+      ],
+      [
+        "taken_3",
+        "2241582"
+      ],
+      [
+        "taken_3",
+        "2258508"
+      ],
+      [
+        "taken_3",
+        "2241704"
+      ],
+      [
+        "ant_man_and_the_wasp_quantumania",
+        "102781569"
+      ],
+      [
+        "taken_3",
+        "2606639"
+      ],
+      [
+        "ant_man_and_the_wasp_quantumania",
+        "102781469"
+      ],
+      [
+        "ant_man_and_the_wasp_quantumania",
+        "102780006"
+      ],
+      [
+        "ant_man_and_the_wasp_quantumania",
+        "102779553"
+      ],
+      [
+        "taken_3",
+        "2241513"
+      ],
+      [
+        "ant_man_and_the_wasp_quantumania",
+        "102780692"
+      ],
+      [
+        "taken_3",
+        "2300782"
+      ],
+      [
+        "ant_man_and_the_wasp_quantumania",
+        "102780270"
+      ],
+      [
+        "taken_3",
+        "2241729"
+      ],
+      [
+        "taken_3",
+        "2241542"
+      ],
+      [
+        "ant_man_and_the_wasp_quantumania",
+        "102782769"
+      ],
+      [
+        "taken_3",
+        "2249445"
+      ],
+      [
+        "taken_3",
+        "2242720"
+      ],
+      [
+        "ant_man_and_the_wasp_quantumania",
+        "102780376"
+      ],
+      [
+        "ant_man_and_the_wasp_quantumania",
+        "102781241"
+      ],
+      [
+        "ant_man_and_the_wasp_quantumania",
+        "102779951"
+      ],
+      [
+        "ant_man_and_the_wasp_quantumania",
+        "102780769"
+      ],
+      [
+        "ant_man_and_the_wasp_quantumania",
+        "102780524"
+      ],
+      [
+        "ant_man_and_the_wasp_quantumania",
+        "102779560"
+      ],
+      [
+        "ant_man_and_the_wasp_quantumania",
+        "102784444"
+      ],
+      [
+        "ant_man_and_the_wasp_quantumania",
+        "102781269"
+      ],
+      [
+        "ant_man_and_the_wasp_quantumania",
+        "102779555"
+      ],
+      [
+        "taken_3",
+        "2434911"
+      ],
+      [
+        "taken_3",
+        "2240508"
+      ],
+      [
+        "taken_3",
+        "2829828"
+      ],
+      [
+        "taken_3",
+        "2241667"
+      ]
+    ]
+  },
+  "sha256": {
+    "demo.json": "8b51ba862f22bcd408bfe31f2273a2de57750e517d3d988307aba816ab6d9758",
+    "demo_labels.json": "e0dd0e4e5bbb42571f4f5c5476e0e48fdefaf962f01cb2e6ca2b2be22d25a296",
+    "optimization.json": "c9e5c029147575798e4a19c21820300d5a6033985c148fcf0cd89ac7daf86caa",
+    "optimization_labels.json": "07c425f0eb82020c1fd1fb96bd64846710d76c690f222d2384e476a88b48edfa",
+    "test.json": "f7679ec473435bd9caec79e50440501105671b7bc31511311e3c1e836c21b17b",
+    "test_labels.json": "a2dd0d78cf956f84919db1e97f671a07e2a0a112e338ade8bc3fca3d95a5139c"
+  },
+  "source_rows": {
+    "ant_man_and_the_wasp_quantumania": 256,
+    "taken_3": 120
+  },
+  "unique_source_rows": {
+    "ant_man_and_the_wasp_quantumania": 128,
+    "taken_3": 120
+  }
+}
