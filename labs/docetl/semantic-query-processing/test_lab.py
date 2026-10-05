@@ -226,7 +226,16 @@ class StreamlinedChecks(unittest.TestCase):
         original_by_tag = {tag: c.source for c in ORIGINAL.cells for tag in c.metadata.get('tags', [])}
         for tag in ('provider_choice', 'docetl_settings', 'define_filter', 'live_first_filter',
                     'define_pair_query', 'live_pair_join', 'compare_pair_sets', 'pair_metrics', 'moar_controls'):
-            self.assertEqual(notebook_cell(tag), original_by_tag[tag], tag)
+            if tag in {'provider_choice', 'moar_controls'}:
+                actual = ast.parse(notebook_cell(tag)).body
+                expected = ast.parse(original_by_tag[tag]).body
+                self.assertEqual([ast.dump(node) for node in actual[:-1]],
+                                 [ast.dump(node) for node in expected], tag)
+                self.assertIsInstance(actual[-1], ast.Expr)
+                self.assertIsInstance(actual[-1].value, ast.Call)
+                self.assertEqual(actual[-1].value.func.id, 'print')
+            else:
+                self.assertEqual(notebook_cell(tag), original_by_tag[tag], tag)
         old = ast.parse(original_by_tag['pair_helpers'])
         old_pairing = next(n for n in old.body if isinstance(n, ast.FunctionDef) and n.name == 'pairs_from_labels')
         new = ast.parse(notebook_cell('live_pair_labels'))
@@ -292,23 +301,24 @@ class SupportChecks(unittest.TestCase):
         self.assertIn('32 reviews', result.stdout)
         self.assertEqual((folder / 'data/demo.json').read_bytes(), (ROOT / 'data/demo.json').read_bytes())
 
-    def test_colab_upload_bootstrap_in_offline_simulation(self) -> None:
+    def test_colab_download_bootstrap_in_offline_simulation(self) -> None:
         folder = shared.test_directory()
         bundle = ROOT / 'movie_lab_setup.zip'
         setup = f'''import sys
+import io
+import urllib.request
 from pathlib import Path
 from types import ModuleType
 google = ModuleType('google')
 colab = ModuleType('google.colab')
-files = ModuleType('google.colab.files')
-def upload():
+def download(url, timeout):
+    assert url.startswith('https://raw.githubusercontent.com/SleepyLGod/AIST4020-Lab-Tutorials/')
+    assert timeout == 60
     blob = Path({str(bundle)!r}).read_bytes()
-    Path('movie_lab_setup.zip').write_bytes(blob)
-    return {{'movie_lab_setup.zip': blob}}
-files.upload = upload
+    return io.BytesIO(blob)
+urllib.request.urlopen = download
 google.colab = colab
-colab.files = files
-sys.modules.update({{'google': google, 'google.colab': colab, 'google.colab.files': files}})
+sys.modules.update({{'google': google, 'google.colab': colab}})
 '''
         # Redirect the Colab directory to a retained temp directory; run the real cell otherwise.
         code = notebook_cell('data_loading').replace("Path('/content/docetl-movie-lab')", f'Path({str(folder)!r})')
@@ -316,6 +326,34 @@ sys.modules.update({{'google': google, 'google.colab': colab, 'google.colab.file
                                 cwd=folder, capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn('Course files ready', result.stdout)
+        self.assertIn('Downloading the course files', result.stdout)
+
+    def test_bad_download_is_not_saved_or_imported(self) -> None:
+        folder = shared.test_directory()
+        setup = "import io, urllib.request\nurllib.request.urlopen = lambda *a, **k: io.BytesIO(b'wrong ZIP')\n"
+        result = subprocess.run([sys.executable, '-c', setup + notebook_cell('data_loading')],
+                                cwd=folder, capture_output=True, text=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('download failed verification', result.stderr)
+        self.assertFalse((folder / 'movie_lab_setup.zip').exists())
+        self.assertFalse((folder / 'data').exists())
+
+    def test_pair_table_escapes_full_text_and_handles_empty_results(self) -> None:
+        import pandas as pd
+        namespace = {'pd': pd, 'HTML': lambda value: value, 'display': lambda value: rendered.append(value),
+                     'pair_index': {('movie', '1'): {'reviewText': '<script>alert(1)</script>'},
+                                    ('movie', '2'): {'reviewText': 'An opposite opinion.'}}}
+        rendered = []
+        nodes = [node for node in ast.parse(notebook_cell('pair_helpers')).body
+                 if isinstance(node, ast.FunctionDef) and node.name == 'show_pairs']
+        exec(compile(ast.Module(body=nodes, type_ignores=[]), '<pair table>', 'exec'), namespace)
+        with redirect_stdout(io.StringIO()):
+            namespace['show_pairs']({(('movie', '1'), ('movie', '2'))})
+            namespace['show_pairs'](set())
+        self.assertEqual(len(rendered), 1)
+        self.assertIn('&lt;script&gt;', rendered[0])
+        self.assertNotIn('<script>', rendered[0])
+        self.assertIn('An opposite opinion.', rendered[0])
 
     def test_wrong_bundle_stops_before_importing_support(self) -> None:
         folder = shared.test_directory()

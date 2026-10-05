@@ -1,6 +1,6 @@
 # Semantic Query Processing with DocETL
 
-Start with [semantic_query_processing.ipynb](semantic_query_processing.ipynb). In Colab, upload [movie_lab_setup.zip](movie_lab_setup.zip?raw=true) when prompted. Locally, keep that ZIP beside the notebook. It contains the support code and the same data as `movie_lab_data.zip`.
+Start with [semantic_query_processing.ipynb](semantic_query_processing.ipynb). The first setup cell downloads and checks the course files from GitHub when needed. For offline local use, keep [movie_lab_setup.zip](movie_lab_setup.zip?raw=true) beside the notebook. It contains the support code and the same data as `movie_lab_data.zip`.
 
 Choose one model provider in the notebook. Queries and MOAR search have separate switches so that running setup does not start paid requests.
 
