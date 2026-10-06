@@ -242,7 +242,7 @@ class StreamlinedChecks(unittest.TestCase):
 
     def test_queries_prompts_controls_and_calculations_are_preserved(self) -> None:
         original_by_tag = {tag: c.source for c in ORIGINAL.cells for tag in c.metadata.get('tags', [])}
-        for tag in ('provider_choice', 'docetl_settings', 'define_filter', 'live_first_filter',
+        for tag in ('docetl_settings', 'define_filter', 'live_first_filter',
                     'define_pair_query', 'live_pair_join', 'compare_pair_sets', 'pair_metrics', 'moar_controls'):
             if tag in {'provider_choice', 'moar_controls'}:
                 actual = ast.parse(notebook_cell(tag)).body
@@ -382,19 +382,174 @@ sys.modules.update({{'google': google, 'google.colab': colab}})
         self.assertIn('Use the course bundle', result.stderr)
         self.assertFalse((folder / 'data').exists())
 
-    def test_provider_configuration_does_not_switch_or_mutate_options(self) -> None:
-        original = {'max_tokens': 512, 'num_retries': 0}
+    def backend_choices(self) -> dict:
+        """Read the actual student-facing defaults without loading credentials."""
+        ns = {}
+        exec(notebook_cell('provider_choice'), ns)
+        self.assertEqual(ns['backend'], 'deepseek')
+        self.assertFalse(ns['ENABLE_MODEL_CALLS'])
+        return ns['BACKENDS']
+
+    def test_backend_configuration_preserves_presets_and_resets_options(self) -> None:
+        choices = self.backend_choices()
+        before = json.dumps(choices, sort_keys=True)
+        base = {'max_tokens': 512, 'num_retries': 0}
+        expected = {
+            'deepseek': {**base, 'api_base': 'https://api.deepseek.com',
+                         'extra_body': {'thinking': {'type': 'disabled'}}},
+            'nvidia': {**base, 'api_base': 'https://integrate.api.nvidia.com/v1',
+                       'extra_body': {'chat_template_kwargs': {'enable_thinking': False}}},
+            'ollama': {**base, 'api_base': 'http://127.0.0.1:11434', 'num_ctx': 8192, 'think': False},
+        }
         with patch.object(support, 'load_key') as keys, redirect_stdout(io.StringIO()):
-            for provider, key in [('deepseek', 'DEEPSEEK_API_KEY'), ('nvidia', 'NVIDIA_NIM_API_KEY')]:
-                options = support.configure_provider(provider, 'nvidia/nemotron-3-super-120b-a12b', original, False)
-                keys.assert_called_with(key, False)
-                self.assertIn('api_base', options)
-            keys.reset_mock()
-            options = support.configure_provider('ollama', '', original, False)
-            keys.assert_not_called()
-            self.assertEqual(options['num_ctx'], 8192)
-            self.assertFalse(options['think'])
-        self.assertEqual(original, {'max_tokens': 512, 'num_retries': 0})
+            for backend in ('deepseek', 'nvidia', 'ollama', 'deepseek'):
+                keys.reset_mock()
+                model, options = support.configure_backend(backend, choices, False)
+                self.assertEqual(model, choices[backend]['model'])
+                self.assertEqual(options, expected[backend])
+                if backend == 'ollama':
+                    keys.assert_not_called()
+                else:
+                    keys.assert_called_once_with(choices[backend]['key_env'], False)
+                options['api_base'] = 'stale'
+            choices['custom'] = dict(model='anthropic/test-model', key_env='ANTHROPIC_API_KEY')
+            self.assertEqual(support.configure_backend('custom', choices, False)[1], base)
+            choices['nvidia']['model'] = 'nvidia_nim/z-ai/glm-5.3'
+            self.assertEqual(support.configure_backend('nvidia', choices, False)[1],
+                             {**base, 'api_base': 'https://integrate.api.nvidia.com/v1'})
+        self.assertEqual(json.loads(before)['deepseek'], choices['deepseek'])
+        self.assertEqual(json.loads(before)['ollama'], choices['ollama'])
+
+    def test_custom_backend_uses_environment_key_without_preset_options(self) -> None:
+        import os
+        choices = self.backend_choices()
+        sentinel = 'test-only-not-a-real-key'
+        for name in ('OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'ZAI_API_KEY', 'MOONSHOT_API_KEY'):
+            choices['custom'] = dict(model='openai/test-model', key_env=name)
+            with patch.dict(os.environ, {name: sentinel}), redirect_stdout(io.StringIO()) as captured:
+                model, options = support.configure_backend('custom', choices, False)
+                with self.assertRaisesRegex(ValueError, 'provider key'):
+                    support.check_record_secrets({'response': sentinel})
+            self.assertEqual(options, {'max_tokens': 512, 'num_retries': 0})
+            self.assertNotIn(sentinel, captured.getvalue() + json.dumps(choices) + json.dumps(options))
+
+    def test_custom_secrets_and_hidden_input_keep_key_out_of_settings(self) -> None:
+        import os
+        choices = self.backend_choices()
+        choices['custom'] = dict(model='openai/test-model', key_env='OPENAI_API_KEY')
+        google = ModuleType('google')
+        colab = ModuleType('google.colab')
+        google.colab = colab
+        colab.userdata = SimpleNamespace(get=lambda name: 'test-only-secret')
+        with patch.dict(sys.modules, {'google': google, 'google.colab': colab}), \
+             patch.dict(os.environ, {}, clear=True), redirect_stdout(io.StringIO()) as captured:
+            result = support.configure_backend('custom', choices, True)
+            self.assertEqual(os.environ['OPENAI_API_KEY'], 'test-only-secret')
+            self.assertNotIn('test-only-secret', json.dumps(result))
+        self.assertNotIn('test-only-secret', captured.getvalue())
+        with patch.dict(os.environ, {}, clear=True), \
+             patch.object(support.getpass, 'getpass', return_value='test-only-hidden'), \
+             redirect_stdout(io.StringIO()) as captured:
+            result = support.configure_backend('custom', choices, False)
+            self.assertEqual(os.environ['OPENAI_API_KEY'], 'test-only-hidden')
+            self.assertNotIn('test-only-hidden', json.dumps(result))
+        self.assertNotIn('test-only-hidden', captured.getvalue())
+
+    def test_backend_choice_validation_and_moar_model(self) -> None:
+        choices = self.backend_choices()
+        with patch.object(support, 'load_key') as load:
+            with self.assertRaisesRegex(ValueError, 'Choose'):
+                support.configure_backend('unknown', choices, False)
+            for model in ('', 'model-only', '/model', 'provider/', 'https://proxy.test/model', 'a/ b'):
+                choices['custom'] = dict(model=model, key_env='OPENAI_API_KEY')
+                with self.assertRaisesRegex(ValueError, 'model'):
+                    support.configure_backend('custom', choices, False)
+            for key in ('', 'not a name', 'TEST-KEY', None):
+                choices['custom'] = dict(model='openai/test-model', key_env=key)
+                with self.assertRaisesRegex(ValueError, 'key_env'):
+                    support.configure_backend('custom', choices, False)
+            choices['custom'] = dict(model='openai/test-model', key_env='OPENAI_API_KEY', api_key='forbidden')
+            with self.assertRaisesRegex(ValueError, 'only model and key_env'):
+                support.configure_backend('custom', choices, False)
+            choices['deepseek']['model'] = 'openai/test-model'
+            with self.assertRaisesRegex(ValueError, 'must start'):
+                support.configure_backend('deepseek', choices, False)
+            load.assert_not_called()
+        ns = {'support': support, 'IN_COLAB': False}
+        exec(notebook_cell('provider_choice'), ns)
+        ns['backend'] = 'custom'
+        ns['BACKENDS']['custom'] = dict(model='anthropic/test-model', key_env='ANTHROPIC_API_KEY')
+        with patch.object(support, 'load_key'), redirect_stdout(io.StringIO()):
+            exec(notebook_cell('provider_auth'), ns)
+            exec(notebook_cell('moar_controls'), ns)
+        self.assertEqual(ns['MODEL_REF'], 'anthropic/test-model')
+        self.assertEqual(ns['REWRITE_MODEL_REF'], ns['MODEL_REF'])
+        self.assertFalse(ns['RUN_MOAR'])
+        self.assertFalse(ns['ENABLE_MODEL_CALLS'])
+
+    def test_inline_setup_skips_plain_python(self) -> None:
+        tree = ast.parse(notebook_cell('install'))
+        fix = [node for node in tree.body if isinstance(node, ast.If)
+               and isinstance(node.test, ast.Compare) and isinstance(node.test.left, ast.Name)
+               and node.test.left.id == 'ipython']
+        self.assertEqual(len(fix), 1)
+        exec(compile(ast.Module(body=fix, type_ignores=[]), '<inline setup>', 'exec'), {'ipython': None})
+
+    @unittest.skipUnless(importlib.util.find_spec('docetl') and importlib.util.find_spec('nbclient'),
+                         'Requires the pinned DocETL package and nbclient for a real notebook kernel.')
+    def test_real_kernel_emits_images_after_docetl_import(self) -> None:
+        import os
+        from jupyter_client import KernelManager
+        from nbclient import NotebookClient
+
+        folder = shared.test_directory()
+        # Use only synthetic fixture records; the kernel receives no provider credentials.
+        initialize = f'''
+import sys
+sys.path.insert(0, {str(ROOT)!r})
+import lab_support as support
+import pandas as pd
+import matplotlib
+import docetl
+import litellm
+def no_model(*args, **kwargs):
+    raise AssertionError('Model requests are forbidden in display tests.')
+litellm.completion = no_model
+assert matplotlib.get_backend().lower() == 'agg', matplotlib.get_backend()
+'''
+        source = notebook_cell('install')
+        restore = source[source.index('import docetl'):source.index('display(pd.DataFrame')]
+        fixtures = '''
+pair_reviews = [{'id': 'fixture', 'reviewId': str(i), 'reviewText': f'Test-only review {i}'} for i in range(8)]
+keys = [support.review_key(r) for r in pair_reviews]
+reference_pairs = {(a, b) for i, a in enumerate(keys) for j, b in enumerate(keys) if i % 2 != j % 2}
+pairs_a = set(reference_pairs)
+pairs_b = set()
+method_a = {'elapsed_seconds': 2, 'token_usage': {'test': {'prompt_tokens': 10, 'completion_tokens': 2}}}
+method_b = {'elapsed_seconds': 1, 'token_usage': None}
+'''
+        tags = ('plan_diagram', 'pair_matrix_display', 'work_charts')
+        probe = nbformat.v4.new_notebook(cells=[nbformat.v4.new_code_cell(initialize),
+            nbformat.v4.new_code_cell(restore), nbformat.v4.new_code_cell(fixtures)] +
+            [nbformat.v4.new_code_cell(notebook_cell(tag)) for tag in tags])
+        km = KernelManager(kernel_name='python3')
+        km.kernel_spec.argv = [sys.executable, '-m', 'ipykernel_launcher', '-f', '{connection_file}']
+        client = NotebookClient(probe, km=km, timeout=120,
+                                resources={'metadata': {'path': str(folder)}})
+        env = {name: os.environ[name] for name in ('PATH', 'TMPDIR', 'LANG', 'SYSTEMROOT') if name in os.environ}
+        env.update(HOME=str(folder), IPYTHONDIR=str(folder/'ipython'), MPLCONFIGDIR=str(folder/'mpl'),
+                   LITELLM_LOCAL_MODEL_COST_MAP='True', OTEL_SDK_DISABLED='true')
+        try:
+            client.execute(env=env)
+        finally:
+            if client.kc is not None:
+                client.kc.stop_channels()
+            if km.has_kernel:
+                km.shutdown_kernel(now=True)
+        for tag, cell in zip(tags, probe.cells[-3:]):
+            self.assertTrue(any('image/png' in output.get('data', {}) for output in cell.outputs), tag)
+        self.assertTrue(all(output.output_type != 'error' for c in probe.cells for output in c.outputs))
+        nbformat.write(probe, folder/'inline-display-check.ipynb')
 
     def test_logs_preserve_failures_and_timeouts(self) -> None:
         log = shared.test_directory() / 'run.log'
@@ -623,13 +778,14 @@ class QuerySpineChecks(unittest.TestCase):
             return {'rows': rows, 'elapsed_seconds': 1.0, 'wall_seconds': 1.1, 'cache': 'bypassed',
                     'model': namespace['MODEL_REF'], 'reported_cost_usd': None}
 
-        with patch.object(support, 'run_query', side_effect=query_run), \
+        with patch.object(support, 'load_key'), \
+             patch.object(support, 'run_query', side_effect=query_run), \
              patch.object(support, 'run_pair_query', side_effect=pair_run), \
              patch.object(support, 'show_reviews'), patch.object(support, 'show_pairs'), \
              redirect_stdout(io.StringIO()):
             for cell in NB.cells:
                 tags = set(cell.metadata.get('tags', []))
-                if cell.cell_type != 'code' or tags & {'data_loading', 'install', 'provider_auth', 'ollama_setup'}:
+                if cell.cell_type != 'code' or tags & {'data_loading', 'install', 'ollama_setup'}:
                     continue
                 exec(cell.source, namespace)
         self.assertEqual(len(namespace['pair_reviews']), 8)

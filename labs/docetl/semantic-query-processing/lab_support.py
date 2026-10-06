@@ -29,6 +29,7 @@ LABELS = ('POSITIVE', 'NEGATIVE')
 DATA_FILES = {f'{split}{suffix}.json' for split in ('demo', 'optimization', 'test')
               for suffix in ('', '_labels')}
 MOAR_RECORD_FORMAT = 'docetl-movie-lab-moar-v1'
+_CUSTOM_KEY_ENVS: set[str] = set()
 
 
 
@@ -266,7 +267,8 @@ def checked_reported_cost(value: object) -> float | None:
 def check_record_secrets(record: dict) -> None:
     """Refuse to save known provider keys or explicit credential fields."""
     encoded = json.dumps(record, ensure_ascii=False)
-    for name in ('DEEPSEEK_API_KEY', 'NVIDIA_NIM_API_KEY', 'OPENAI_API_KEY', 'ANTHROPIC_API_KEY'):
+    key_names = {'DEEPSEEK_API_KEY', 'NVIDIA_NIM_API_KEY', 'OPENAI_API_KEY', 'ANTHROPIC_API_KEY'}
+    for name in key_names | _CUSTOM_KEY_ENVS:
         secret = os.environ.get(name, '')
         if secret and secret in encoded:
             raise ValueError('A provider key appeared in the record; it was not saved.')
@@ -600,29 +602,50 @@ def load_key(name: str, in_colab: bool) -> None:
     os.environ[name] = value
 
 
-def configure_provider(provider: str, nvidia_model: str, options: dict,
-                       in_colab: bool) -> dict:
-    """Configure only the selected provider; never print or persist its key."""
-    if provider not in {'deepseek', 'nvidia', 'ollama'}:
-        raise ValueError('Unknown provider.')
-    options = dict(options)
-    if provider == 'deepseek':
-        load_key('DEEPSEEK_API_KEY', in_colab)
+def configure_backend(backend: str, backends: dict[str, dict[str, str]],
+                      in_colab: bool) -> tuple[str, dict]:
+    """Load the selected key and return its model and fresh completion settings."""
+    if backend not in {'deepseek', 'nvidia', 'ollama', 'custom'} or backend not in backends:
+        raise ValueError('Choose deepseek, ollama, nvidia, or custom from BACKENDS.')
+    config = backends[backend]
+    if not isinstance(config, dict) or set(config) != {'model', 'key_env'}:
+        raise ValueError('Each BACKENDS entry needs only model and key_env; never put a key value here.')
+    model = config['model']
+    if (not isinstance(model, str) or '/' not in model or not all(model.split('/', 1))
+            or '://' in model or any(character.isspace() for character in model)):
+        raise ValueError(f'Set BACKENDS[{backend!r}]["model"] to a LiteLLM provider/model name.')
+    prefixes = {'deepseek': 'deepseek/', 'nvidia': 'nvidia_nim/', 'ollama': 'ollama_chat/'}
+    if backend in prefixes and not model.startswith(prefixes[backend]):
+        raise ValueError(f'The {backend} model must start with {prefixes[backend]}. Use custom for another provider.')
+    key_env = config['key_env']
+    if backend == 'ollama':
+        if key_env != '':
+            raise ValueError('Leave key_env empty for local Ollama.')
+    else:
+        if not isinstance(key_env, str) or not key_env or not key_env.isascii() or not key_env.isidentifier():
+            raise ValueError(f'Set BACKENDS[{backend!r}]["key_env"] to the API-key environment variable name.')
+        expected_keys = {'deepseek': 'DEEPSEEK_API_KEY', 'nvidia': 'NVIDIA_NIM_API_KEY'}
+        if backend in expected_keys and key_env != expected_keys[backend]:
+            raise ValueError(f'Use {expected_keys[backend]} as key_env for {backend}.')
+        load_key(key_env, in_colab)
+        _CUSTOM_KEY_ENVS.add(key_env)
+
+    options = {'max_tokens': 512, 'num_retries': 0}
+    if backend == 'deepseek':
         options['api_base'] = 'https://api.deepseek.com'
         options['extra_body'] = {'thinking': {'type': 'disabled'}}
-    elif provider == 'nvidia':
-        load_key('NVIDIA_NIM_API_KEY', in_colab)
+    elif backend == 'nvidia':
         options['api_base'] = 'https://integrate.api.nvidia.com/v1'
-        if nvidia_model == 'nvidia/nemotron-3-super-120b-a12b':
+        if model == 'nvidia_nim/nvidia/nemotron-3-super-120b-a12b':
             # This query only needs a short judgment, so disable extended thinking.
             options['extra_body'] = {'chat_template_kwargs': {'enable_thinking': False}}
-    else:
+    elif backend == 'ollama':
         options['api_base'] = 'http://127.0.0.1:11434'
         options['num_ctx'] = 8192
         options['think'] = False
 
-    print(f'Configuration prepared for {provider}. No review query has run yet.')
-    return options
+    print(f'Backend: {backend}; model: {model}. No review query has run yet.')
+    return model, options
 
 
 
