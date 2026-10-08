@@ -2,3 +2,6 @@
 /runs/
 /.ipynb_checkpoints/
 __pycache__/
+
+# Keep source documents and reference answers local. The curated ZIP is published separately.
+/document_data/

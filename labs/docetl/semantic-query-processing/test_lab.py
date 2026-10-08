@@ -22,7 +22,7 @@ import lab_support as support
 
 ROOT = Path(__file__).resolve().parent
 ORIGINAL = nbformat.read(ROOT / 'semantic_query_processing_full.ipynb', as_version=4)
-NB = nbformat.read(ROOT / 'semantic_query_processing.ipynb', as_version=4)
+NB = nbformat.read(ROOT / 'semantic_query_processing_movies.ipynb', as_version=4)
 
 # Load a separate module instance so the original suite keeps its own notebook.
 spec = importlib.util.spec_from_file_location('_streamlined_shared_tests', ROOT / 'test_full_lab.py')
