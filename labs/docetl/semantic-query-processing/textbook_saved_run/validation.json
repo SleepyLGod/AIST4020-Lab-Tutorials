@@ -1,0 +1,20 @@
+{
+  "date": "2026-10-09",
+  "environment": "Disposable Colab CPU",
+  "model": "deepseek/deepseek-flash",
+  "completed": ["filter", "map", "equijoin", "reduce", "MOAR search with two iterations"],
+  "search_seconds": 76.34148370000003,
+  "display_candidate": "trial-2: operator fusion",
+  "prompt_case": "trial-3: prompt rewriting from the same completed search",
+  "original_correct": "3/6",
+  "fusion_correct": "6/6",
+  "prompt_correct": "6/6",
+  "operator_observation": "The first filter retained positive reviews R1 and R3. The semantic join subsequently rejected their extracted non-complaints. This is not a claim that every intermediate result was correct.",
+  "execution_estimates_usd": {"original": 0.001132464, "fusion": 0.000810516, "prompt": 0.001012632},
+  "cost_source": "DocETL execution estimates, not a provider bill. Search cost is separate in search.json. Whole-run usage is unavailable.",
+  "outer_run": "The runtime disappeared during an additional standalone prompt-rewriting experiment, after search outputs had been downloaded. Cause unknown. That incomplete experiment is not used in the lesson.",
+  "limits": {"max_http_model_requests": 100, "max_model_run_seconds": 900},
+  "cleanup": "Colab assignment list confirmed zero runtimes. The stale local controller was interrupted; unassign returned Not Found because the runtime was already gone.",
+  "notebook_status": "Query definitions ran remotely; the final textbook notebook has not been executed end-to-end in a fresh Colab. Its new course bundle is local and unpublished.",
+  "portable_query": "Generated prompts, schema, code and operation order are retained. Provider connection options are supplied from the selected student backend. Re-execution may differ from the saved run."
+}

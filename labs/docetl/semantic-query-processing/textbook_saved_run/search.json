@@ -1,0 +1,810 @@
+{
+  "format": "docetl-textbook-search-v1",
+  "kind": "moar_search",
+  "model": "deepseek/deepseek-flash",
+  "input_sha256": "6d131d6fdb7dd09da48384385872babf5552204a2a16ce478d11d0733e13918b",
+  "plans": [
+    {
+      "id": "trial-1",
+      "config": {
+        "datasets": {
+          "reviews": {
+            "type": "file",
+            "path": "/content/docetl-document-live-1007/runs/search/540aa509/inputs.json"
+          }
+        },
+        "operations": [
+          {
+            "name": "keep_complaints",
+            "type": "filter",
+            "prompt": "Does this review express dissatisfaction? Review: {{ input.text }}",
+            "output": {
+              "schema": {
+                "keep": "bool"
+              }
+            },
+            "litellm_completion_kwargs": {
+              "max_tokens": 1536,
+              "num_retries": 0,
+              "api_base": "https://api.deepseek.com",
+              "extra_body": {
+                "thinking": {
+                  "type": "disabled"
+                }
+              }
+            }
+          },
+          {
+            "name": "classify_topic",
+            "type": "map",
+            "prompt": "Classify the complaint in this review: {{ input.text }}\nReturn Food for food taste or cooking, or Service for staff attention or behavior.",
+            "output": {
+              "schema": {
+                "topic": "string"
+              }
+            },
+            "litellm_completion_kwargs": {
+              "max_tokens": 1536,
+              "num_retries": 0,
+              "api_base": "https://api.deepseek.com",
+              "extra_body": {
+                "thinking": {
+                  "type": "disabled"
+                }
+              }
+            }
+          }
+        ],
+        "pipeline": {
+          "steps": [
+            {
+              "name": "step_keep_complaints",
+              "operations": [
+                "keep_complaints"
+              ],
+              "input": "reviews"
+            },
+            {
+              "name": "step_classify_topic",
+              "operations": [
+                "classify_topic"
+              ],
+              "input": "step_keep_complaints"
+            }
+          ],
+          "output": {
+            "type": "file",
+            "path": "/content/docetl-document-live-1007/runs/search/540aa509/pipeline_deepseek_deepseek-flash.json"
+          }
+        },
+        "default_model": "deepseek/deepseek-flash",
+        "bypass_cache": true
+      },
+      "execution_cost_estimate_usd": 0.0011324640000000001,
+      "execution_seconds": 9.140313917000014,
+      "rows": [
+        {
+          "doc_id": "R1",
+          "text": "Awesome drink specials during happy hour. Fantastic wings that are crispy and delicious, wing night on Tuesday and Thursday!",
+          "topic": "Food"
+        },
+        {
+          "doc_id": "R2",
+          "text": "Far away from real Chinese food. Doesn't even taste good as American style Chinese food.",
+          "topic": "Food"
+        },
+        {
+          "doc_id": "R3",
+          "text": "I love this place!  Great atmosphere and friendly service every time I go!!",
+          "topic": "Service"
+        },
+        {
+          "doc_id": "R4",
+          "text": "Servers are chatting, not paying attention to tables. I can see my salad is ready at the window. Worst serves ever.",
+          "topic": "Service"
+        },
+        {
+          "doc_id": "R5",
+          "text": "Was very disappointed with the food. It was overcooked and not seasoned very well",
+          "topic": "Food"
+        },
+        {
+          "doc_id": "R6",
+          "text": "Good food",
+          "topic": "Food"
+        }
+      ],
+      "score": {
+        "accuracy": 0.5,
+        "correct": 3,
+        "total": 6,
+        "decisions": [
+          {
+            "doc_id": "R1",
+            "expected": null,
+            "actual": "Food",
+            "correct": false
+          },
+          {
+            "doc_id": "R2",
+            "expected": "Food",
+            "actual": "Food",
+            "correct": true
+          },
+          {
+            "doc_id": "R3",
+            "expected": null,
+            "actual": "Service",
+            "correct": false
+          },
+          {
+            "doc_id": "R4",
+            "expected": "Service",
+            "actual": "Service",
+            "correct": true
+          },
+          {
+            "doc_id": "R5",
+            "expected": "Food",
+            "actual": "Food",
+            "correct": true
+          },
+          {
+            "doc_id": "R6",
+            "expected": null,
+            "actual": "Food",
+            "correct": false
+          }
+        ]
+      }
+    },
+    {
+      "id": "trial-2",
+      "config": {
+        "datasets": {
+          "reviews": {
+            "type": "file",
+            "path": "/content/docetl-document-live-1007/runs/search/540aa509/inputs.json"
+          }
+        },
+        "operations": [
+          {
+            "name": "fused_keep_complaints_classify_topic",
+            "prompt": "Review: {{ input.text }}\n\nFirst, determine whether this review expresses dissatisfaction (true) or not (false). Then, if it expresses dissatisfaction, classify the complaint: return Food for food taste or cooking, or Service for staff attention or behavior. If it does not express dissatisfaction, return None for the topic.\n\nReturn both the boolean 'keep' (true if the review expresses dissatisfaction) and the 'topic' (Food, Service, or None).",
+            "model": "deepseek/deepseek-flash",
+            "litellm_completion_kwargs": {
+              "temperature": 0
+            },
+            "type": "map",
+            "output": {
+              "schema": {
+                "keep": "bool",
+                "topic": "string"
+              }
+            }
+          },
+          {
+            "name": "filter_fused_keep_complaints_classify_topic",
+            "type": "code_filter",
+            "code": "\ndef transform(input_doc):\n    return input_doc.get('keep', False)\n"
+          }
+        ],
+        "pipeline": {
+          "steps": [
+            {
+              "name": "step_keep_complaints",
+              "operations": [
+                "fused_keep_complaints_classify_topic",
+                "filter_fused_keep_complaints_classify_topic"
+              ],
+              "input": "reviews"
+            },
+            {
+              "name": "step_classify_topic",
+              "operations": [],
+              "input": "step_keep_complaints"
+            }
+          ],
+          "output": {
+            "type": "file",
+            "path": "/content/docetl-document-live-1007/runs/search/540aa509/pipeline_deepseek_2.json"
+          }
+        },
+        "default_model": "deepseek/deepseek-flash",
+        "bypass_cache": true
+      },
+      "execution_cost_estimate_usd": 0.000810516,
+      "execution_seconds": 4.734465045000007,
+      "rows": [
+        {
+          "doc_id": "R2",
+          "text": "Far away from real Chinese food. Doesn't even taste good as American style Chinese food.",
+          "keep": true,
+          "topic": "Food"
+        },
+        {
+          "doc_id": "R4",
+          "text": "Servers are chatting, not paying attention to tables. I can see my salad is ready at the window. Worst serves ever.",
+          "keep": true,
+          "topic": "Service"
+        },
+        {
+          "doc_id": "R5",
+          "text": "Was very disappointed with the food. It was overcooked and not seasoned very well",
+          "keep": true,
+          "topic": "Food"
+        }
+      ],
+      "score": {
+        "accuracy": 1.0,
+        "correct": 6,
+        "total": 6,
+        "decisions": [
+          {
+            "doc_id": "R1",
+            "expected": null,
+            "actual": null,
+            "correct": true
+          },
+          {
+            "doc_id": "R2",
+            "expected": "Food",
+            "actual": "Food",
+            "correct": true
+          },
+          {
+            "doc_id": "R3",
+            "expected": null,
+            "actual": null,
+            "correct": true
+          },
+          {
+            "doc_id": "R4",
+            "expected": "Service",
+            "actual": "Service",
+            "correct": true
+          },
+          {
+            "doc_id": "R5",
+            "expected": "Food",
+            "actual": "Food",
+            "correct": true
+          },
+          {
+            "doc_id": "R6",
+            "expected": null,
+            "actual": null,
+            "correct": true
+          }
+        ]
+      }
+    },
+    {
+      "id": "trial-3",
+      "config": {
+        "datasets": {
+          "reviews": {
+            "type": "file",
+            "path": "/content/docetl-document-live-1007/runs/search/540aa509/inputs.json"
+          }
+        },
+        "operations": [
+          {
+            "name": "keep_complaints",
+            "type": "filter",
+            "prompt": "Determine whether the following restaurant review expresses customer dissatisfaction — that is, whether it contains a complaint about the food (taste, cooking, quality, portion, temperature, freshness) or the service (staff attentiveness, behavior, speed, order accuracy).\n\nReview: {{ input.text }}\n\nGuidelines:\n- Answer true if the review expresses ANY negative opinion or complaint, even if it also contains positive comments (mixed reviews count as dissatisfaction).\n- Negative indicators include explicit dissatisfaction words (e.g., \"disappointed\", \"worst\", \"bad\", \"not good\", \"poor\", \"rude\", \"overcooked\", \"undercooked\", \"not seasoned\", \"far away from real\", \"doesn't even taste good\") and descriptions of problems with food or service (e.g., servers ignoring tables, wrong orders, long waits, unappetizing food).\n- Answer false if the review is purely positive (only praise for food, service, atmosphere, drinks, or specials) or is neutral with no complaints.\n- A single clear complaint is enough to answer true, even in an otherwise positive review.\n\nRespond with a boolean: true if the review expresses dissatisfaction (a complaint), false if it does not.",
+            "output": {
+              "schema": {
+                "keep": "bool"
+              }
+            },
+            "litellm_completion_kwargs": {
+              "max_tokens": 1536,
+              "num_retries": 0,
+              "api_base": "https://api.deepseek.com",
+              "extra_body": {
+                "thinking": {
+                  "type": "disabled"
+                }
+              }
+            }
+          },
+          {
+            "name": "classify_topic",
+            "type": "map",
+            "prompt": "Classify the complaint in this review: {{ input.text }}\nReturn Food for food taste or cooking, or Service for staff attention or behavior.",
+            "output": {
+              "schema": {
+                "topic": "string"
+              }
+            },
+            "litellm_completion_kwargs": {
+              "max_tokens": 1536,
+              "num_retries": 0,
+              "api_base": "https://api.deepseek.com",
+              "extra_body": {
+                "thinking": {
+                  "type": "disabled"
+                }
+              }
+            }
+          }
+        ],
+        "pipeline": {
+          "steps": [
+            {
+              "name": "step_keep_complaints",
+              "operations": [
+                "keep_complaints"
+              ],
+              "input": "reviews"
+            },
+            {
+              "name": "step_classify_topic",
+              "operations": [
+                "classify_topic"
+              ],
+              "input": "step_keep_complaints"
+            }
+          ],
+          "output": {
+            "type": "file",
+            "path": "/content/docetl-document-live-1007/runs/search/540aa509/pipeline_deepseek_1-1-cost.json"
+          }
+        },
+        "default_model": "deepseek/deepseek-flash",
+        "bypass_cache": true
+      },
+      "execution_cost_estimate_usd": 0.0010126319999999999,
+      "execution_seconds": 7.305858252999997,
+      "rows": [
+        {
+          "doc_id": "R2",
+          "text": "Far away from real Chinese food. Doesn't even taste good as American style Chinese food.",
+          "topic": "Food"
+        },
+        {
+          "doc_id": "R4",
+          "text": "Servers are chatting, not paying attention to tables. I can see my salad is ready at the window. Worst serves ever.",
+          "topic": "Service"
+        },
+        {
+          "doc_id": "R5",
+          "text": "Was very disappointed with the food. It was overcooked and not seasoned very well",
+          "topic": "Food"
+        }
+      ],
+      "score": {
+        "accuracy": 1.0,
+        "correct": 6,
+        "total": 6,
+        "decisions": [
+          {
+            "doc_id": "R1",
+            "expected": null,
+            "actual": null,
+            "correct": true
+          },
+          {
+            "doc_id": "R2",
+            "expected": "Food",
+            "actual": "Food",
+            "correct": true
+          },
+          {
+            "doc_id": "R3",
+            "expected": null,
+            "actual": null,
+            "correct": true
+          },
+          {
+            "doc_id": "R4",
+            "expected": "Service",
+            "actual": "Service",
+            "correct": true
+          },
+          {
+            "doc_id": "R5",
+            "expected": "Food",
+            "actual": "Food",
+            "correct": true
+          },
+          {
+            "doc_id": "R6",
+            "expected": null,
+            "actual": null,
+            "correct": true
+          }
+        ]
+      }
+    },
+    {
+      "id": "trial-4",
+      "config": {
+        "datasets": {
+          "reviews": {
+            "type": "file",
+            "path": "/content/docetl-document-live-1007/runs/search/540aa509/inputs.json"
+          }
+        },
+        "operations": [
+          {
+            "name": "keep_complaints",
+            "type": "filter",
+            "prompt": "Determine whether the following restaurant review contains a complaint (customer dissatisfaction). The next pipeline step classifies complaints as either 'Food' (food taste, cooking, quality, freshness, seasoning) or 'Service' (staff attention, behavior, speed, friendliness). Keep the review only if it expresses dissatisfaction in one of these two areas.\n\nKEEP (true) if the review includes any negative criticism about: food (taste, cooking, seasoning, being overcooked/undercooked, quality, freshness) OR service (inattentive/rude/unfriendly staff, slow service, wrong orders, poor treatment). Reviews that contain a complaint even if they also include praise must be kept.\n\nDO NOT KEEP (false) if the review is purely positive or neutral, with no negative criticism about food or service. Generic praise, compliments, and neutral statements without any complaint are excluded.\n\nExamples:\n- \"Awesome drink specials during happy hour. Fantastic wings...\" -> false (all positive, no complaint)\n- \"Far away from real Chinese food. Doesn't even taste good...\" -> true (complaint about food taste)\n- \"I love this place! Great atmosphere and friendly service...\" -> false (all positive)\n- \"Servers are chatting, not paying attention to tables... Worst serves ever.\" -> true (complaint about service)\n- \"Was very disappointed with the food. It was overcooked and not seasoned well\" -> true (complaint about food)\n- \"Good food\" -> false (positive, no complaint)\n\nWhen in doubt, keep the review if it contains any negative statement related to food or service; only exclude reviews with no negative feedback at all.\n\nReview: {{ input.text }}\n\nRespond with true if the review should be kept (contains a complaint), otherwise false.",
+            "output": {
+              "schema": {
+                "keep": "bool"
+              }
+            },
+            "litellm_completion_kwargs": {
+              "max_tokens": 1536,
+              "num_retries": 0,
+              "api_base": "https://api.deepseek.com",
+              "extra_body": {
+                "thinking": {
+                  "type": "disabled"
+                }
+              }
+            }
+          },
+          {
+            "name": "classify_topic",
+            "type": "map",
+            "prompt": "Classify the complaint in this review: {{ input.text }}\nReturn Food for food taste or cooking, or Service for staff attention or behavior.",
+            "output": {
+              "schema": {
+                "topic": "string"
+              }
+            },
+            "litellm_completion_kwargs": {
+              "max_tokens": 1536,
+              "num_retries": 0,
+              "api_base": "https://api.deepseek.com",
+              "extra_body": {
+                "thinking": {
+                  "type": "disabled"
+                }
+              }
+            }
+          }
+        ],
+        "pipeline": {
+          "steps": [
+            {
+              "name": "step_keep_complaints",
+              "operations": [
+                "keep_complaints"
+              ],
+              "input": "reviews"
+            },
+            {
+              "name": "step_classify_topic",
+              "operations": [
+                "classify_topic"
+              ],
+              "input": "step_keep_complaints"
+            }
+          ],
+          "output": {
+            "type": "file",
+            "path": "/content/docetl-document-live-1007/runs/search/540aa509/pipeline_deepseek_1-2-cost.json"
+          }
+        },
+        "default_model": "deepseek/deepseek-flash",
+        "bypass_cache": true
+      },
+      "execution_cost_estimate_usd": 0.00099564,
+      "execution_seconds": 6.840374138000016,
+      "rows": [
+        {
+          "doc_id": "R2",
+          "text": "Far away from real Chinese food. Doesn't even taste good as American style Chinese food.",
+          "topic": "Food"
+        },
+        {
+          "doc_id": "R4",
+          "text": "Servers are chatting, not paying attention to tables. I can see my salad is ready at the window. Worst serves ever.",
+          "topic": "Service"
+        },
+        {
+          "doc_id": "R5",
+          "text": "Was very disappointed with the food. It was overcooked and not seasoned very well",
+          "topic": "Food"
+        }
+      ],
+      "score": {
+        "accuracy": 1.0,
+        "correct": 6,
+        "total": 6,
+        "decisions": [
+          {
+            "doc_id": "R1",
+            "expected": null,
+            "actual": null,
+            "correct": true
+          },
+          {
+            "doc_id": "R2",
+            "expected": "Food",
+            "actual": "Food",
+            "correct": true
+          },
+          {
+            "doc_id": "R3",
+            "expected": null,
+            "actual": null,
+            "correct": true
+          },
+          {
+            "doc_id": "R4",
+            "expected": "Service",
+            "actual": "Service",
+            "correct": true
+          },
+          {
+            "doc_id": "R5",
+            "expected": "Food",
+            "actual": "Food",
+            "correct": true
+          },
+          {
+            "doc_id": "R6",
+            "expected": null,
+            "actual": null,
+            "correct": true
+          }
+        ]
+      }
+    },
+    {
+      "id": "trial-5",
+      "config": {
+        "datasets": {
+          "reviews": {
+            "type": "file",
+            "path": "/content/docetl-document-live-1007/runs/search/540aa509/inputs.json"
+          }
+        },
+        "operations": [
+          {
+            "name": "fused_keep_complaints_classify_topic",
+            "prompt": "Review: {{ input.text }}\n\nAnalyze this single restaurant review and return two values: 'keep' (bool) and 'topic' (string).\n\nSTEP 1 — Determine 'keep' (whether this review expresses dissatisfaction):\nSet keep = true if the review contains ANY negative complaint, including:\n- Negative statements about food quality or taste (e.g., \"doesn't taste good\", \"far away from real Chinese food\", \"overcooked\", \"not seasoned well\", \"disappointed with the food\").\n- Negative statements about staff behavior or attentiveness (e.g., \"servers are chatting, not paying attention\", \"worst service ever\").\n- Subtle or indirect dissatisfaction, not only explicit words like \"bad\" or \"terrible\".\n- Mixed reviews that contain both praise AND a complaint — these still count as keep = true.\nSet keep = false ONLY when the review is entirely positive, neutral, or contains no complaint at all (e.g., \"Good food\", \"I love this place! Great atmosphere and friendly service\").\n\nSTEP 2 — Determine 'topic' (the complaint category):\n- If keep = false: topic = \"None\".\n- If keep = true: assign the topic based on the PRIMARY complaint:\n  - topic = \"Food\" when the complaint concerns food taste, flavor, quality, cooking method, doneness, seasoning, freshness, or the type/authenticity of cuisine.\n  - topic = \"Service\" when the complaint concerns staff attention, behavior, attitude, speed, friendliness, or being ignored/neglected.\n- TIE-BREAKING for reviews with multiple complaints: choose the topic of the most severe or most central complaint. If the review mentions a food complaint AND a service complaint and neither clearly dominates, choose \"Food\".\n- If keep = true but the complaint is about something outside food/service (e.g., price, ambience, wait time, cleanliness), map it to the closest match: \"Service\" for wait times/cleanliness/front-of-house issues, otherwise \"Food\". Never return \"None\" when keep = true.\n\nOUTPUT: Return an object with exactly two fields:\n- \"keep\": a boolean (true if the review expresses dissatisfaction, false otherwise).\n- \"topic\": one of \"Food\", \"Service\", or \"None\" (use \"None\" only when keep = false).",
+            "model": "deepseek/deepseek-flash",
+            "litellm_completion_kwargs": {
+              "temperature": 0
+            },
+            "type": "map",
+            "output": {
+              "schema": {
+                "keep": "bool",
+                "topic": "string"
+              }
+            }
+          },
+          {
+            "name": "filter_fused_keep_complaints_classify_topic",
+            "type": "code_filter",
+            "code": "\ndef transform(input_doc):\n    return input_doc.get('keep', False)\n"
+          }
+        ],
+        "pipeline": {
+          "steps": [
+            {
+              "name": "step_keep_complaints",
+              "operations": [
+                "fused_keep_complaints_classify_topic",
+                "filter_fused_keep_complaints_classify_topic"
+              ],
+              "input": "reviews"
+            },
+            {
+              "name": "step_classify_topic",
+              "operations": [],
+              "input": "step_keep_complaints"
+            }
+          ],
+          "output": {
+            "type": "file",
+            "path": "/content/docetl-document-live-1007/runs/search/540aa509/pipeline_deepseek_2-1-acc.json"
+          }
+        },
+        "default_model": "deepseek/deepseek-flash",
+        "bypass_cache": true
+      },
+      "execution_cost_estimate_usd": 0.0012939240000000001,
+      "execution_seconds": 4.602920305000055,
+      "rows": [
+        {
+          "doc_id": "R2",
+          "text": "Far away from real Chinese food. Doesn't even taste good as American style Chinese food.",
+          "keep": true,
+          "topic": "Food"
+        },
+        {
+          "doc_id": "R4",
+          "text": "Servers are chatting, not paying attention to tables. I can see my salad is ready at the window. Worst serves ever.",
+          "keep": true,
+          "topic": "Service"
+        },
+        {
+          "doc_id": "R5",
+          "text": "Was very disappointed with the food. It was overcooked and not seasoned very well",
+          "keep": true,
+          "topic": "Food"
+        }
+      ],
+      "score": {
+        "accuracy": 1.0,
+        "correct": 6,
+        "total": 6,
+        "decisions": [
+          {
+            "doc_id": "R1",
+            "expected": null,
+            "actual": null,
+            "correct": true
+          },
+          {
+            "doc_id": "R2",
+            "expected": "Food",
+            "actual": "Food",
+            "correct": true
+          },
+          {
+            "doc_id": "R3",
+            "expected": null,
+            "actual": null,
+            "correct": true
+          },
+          {
+            "doc_id": "R4",
+            "expected": "Service",
+            "actual": "Service",
+            "correct": true
+          },
+          {
+            "doc_id": "R5",
+            "expected": "Food",
+            "actual": "Food",
+            "correct": true
+          },
+          {
+            "doc_id": "R6",
+            "expected": null,
+            "actual": null,
+            "correct": true
+          }
+        ]
+      }
+    },
+    {
+      "id": "trial-6",
+      "config": {
+        "datasets": {
+          "reviews": {
+            "type": "file",
+            "path": "/content/docetl-document-live-1007/runs/search/540aa509/inputs.json"
+          }
+        },
+        "operations": [
+          {
+            "name": "fused_keep_complaints_classify_topic",
+            "prompt": "You are analyzing a restaurant review. Your job is to (1) decide whether the review expresses any dissatisfaction, and (2) if so, classify the single dominant complaint as either Food or Service.\n\nReview:\n\"\"\"\n{{ input.text }}\n\"\"\"\n\nSTEP 1 — Determine 'keep' (dissatisfaction):\n- keep = true if the review expresses ANY dissatisfaction, complaint, criticism, disappointment, or negative experience. This includes both strong complaints (e.g., \"worst servers ever\", \"was very disappointed with the food\") and mild ones (e.g., \"was overcooked\", \"not seasoned very well\", \"far away from real Chinese food\").\n- keep = false only if the review is purely positive, neutral, or has no criticism at all (e.g., \"Good food\", \"I love this place!\", \"Awesome drink specials... Fantastic wings\").\n- Ignore statement style and length; a short, terse review can still be a complaint if it is negative.\n\nSTEP 2 — Determine 'topic' (only when keep = true):\nChoose exactly ONE topic:\n- \"Food\": the complaint concerns food quality, taste, flavor, seasoning, cooking/preparation (e.g., overcooked, undercooked, bland, stale, not authentic, poorly made dishes, wings not crispy, salad quality).\n- \"Service\": the complaint concerns staff behavior, attentiveness, speed, or customer handling (e.g., servers chatting and ignoring tables, not paying attention, slow service, rude staff, \"worst servers ever\").\n\nDecision rules:\n- If keep = false, return topic = \"None\".\n- If the review expresses dissatisfaction ONLY about non-food, non-service aspects (e.g., atmosphere, ambiance, decor, price, location, parking), then keep = true but return topic = \"None\", since it does not fit Food or Service.\n- If the review contains complaints about BOTH Food and Service, classify the dominant/primary complaint (the one the reviewer emphasizes most). If they are equally weighted, default to \"Food\".\n- A mention of food status (e.g., \"my salad is ready at the window\") that is used to criticize slow/negligent service is a Service complaint, not Food.\n- When ambiguous, prefer \"Service\" only if the criticism is clearly about staff behavior; otherwise classify as \"Food\".\n\nRespond ONLY with a JSON object containing:\n- \"keep\": true if the review expresses dissatisfaction, false otherwise.\n- \"topic\": \"Food\", \"Service\", or \"None\".\n\nExample outputs:\n- \"Was very disappointed with the food. It was overcooked...\" -> {\"keep\": true, \"topic\": \"Food\"}\n- \"Servers are chatting, not paying attention to tables...\" -> {\"keep\": true, \"topic\": \"Service\"}\n- \"I love this place! Great atmosphere and friendly service...\" -> {\"keep\": false, \"topic\": \"None\"}\n- \"Good food\" -> {\"keep\": false, \"topic\": \"None\"}",
+            "model": "deepseek/deepseek-flash",
+            "litellm_completion_kwargs": {
+              "temperature": 0
+            },
+            "type": "map",
+            "output": {
+              "schema": {
+                "keep": "bool",
+                "topic": "string"
+              }
+            }
+          },
+          {
+            "name": "filter_fused_keep_complaints_classify_topic",
+            "type": "code_filter",
+            "code": "\ndef transform(input_doc):\n    return input_doc.get('keep', False)\n"
+          }
+        ],
+        "pipeline": {
+          "steps": [
+            {
+              "name": "step_keep_complaints",
+              "operations": [
+                "fused_keep_complaints_classify_topic",
+                "filter_fused_keep_complaints_classify_topic"
+              ],
+              "input": "reviews"
+            },
+            {
+              "name": "step_classify_topic",
+              "operations": [],
+              "input": "step_keep_complaints"
+            }
+          ],
+          "output": {
+            "type": "file",
+            "path": "/content/docetl-document-live-1007/runs/search/540aa509/pipeline_deepseek_2-2-acc.json"
+          }
+        },
+        "default_model": "deepseek/deepseek-flash",
+        "bypass_cache": true
+      },
+      "execution_cost_estimate_usd": 0.001518924,
+      "execution_seconds": 4.892571933999989,
+      "rows": [
+        {
+          "doc_id": "R2",
+          "text": "Far away from real Chinese food. Doesn't even taste good as American style Chinese food.",
+          "keep": true,
+          "topic": "Food"
+        },
+        {
+          "doc_id": "R4",
+          "text": "Servers are chatting, not paying attention to tables. I can see my salad is ready at the window. Worst serves ever.",
+          "keep": true,
+          "topic": "Service"
+        },
+        {
+          "doc_id": "R5",
+          "text": "Was very disappointed with the food. It was overcooked and not seasoned very well",
+          "keep": true,
+          "topic": "Food"
+        }
+      ],
+      "score": {
+        "accuracy": 1.0,
+        "correct": 6,
+        "total": 6,
+        "decisions": [
+          {
+            "doc_id": "R1",
+            "expected": null,
+            "actual": null,
+            "correct": true
+          },
+          {
+            "doc_id": "R2",
+            "expected": "Food",
+            "actual": "Food",
+            "correct": true
+          },
+          {
+            "doc_id": "R3",
+            "expected": null,
+            "actual": null,
+            "correct": true
+          },
+          {
+            "doc_id": "R4",
+            "expected": "Service",
+            "actual": "Service",
+            "correct": true
+          },
+          {
+            "doc_id": "R5",
+            "expected": "Food",
+            "actual": "Food",
+            "correct": true
+          },
+          {
+            "doc_id": "R6",
+            "expected": null,
+            "actual": null,
+            "correct": true
+          }
+        ]
+      }
+    }
+  ],
+  "status": "completed",
+  "strategies": [
+    "clarify_instructions",
+    "operator_fusion"
+  ],
+  "search_seconds": 76.34148370000003,
+  "sdk_search_cost_estimate_usd": 0.02068104
+}

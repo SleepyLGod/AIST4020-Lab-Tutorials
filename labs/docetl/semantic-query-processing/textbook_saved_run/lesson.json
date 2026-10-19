@@ -1,0 +1,165 @@
+{
+  "provenance": "real_colab_deepseek_run",
+  "date": "2026-10-09",
+  "model": "deepseek/deepseek-flash",
+  "selected_for_display": "trial-2",
+  "selection": "First valid changed candidate in recorded execution order, not selected by maximum score.",
+  "operations": [
+    {
+      "name": "fused_keep_complaints_classify_topic",
+      "prompt": "Review: {{ input.text }}\n\nFirst, determine whether this review expresses dissatisfaction (true) or not (false). Then, if it expresses dissatisfaction, classify the complaint: return Food for food taste or cooking, or Service for staff attention or behavior. If it does not express dissatisfaction, return None for the topic.\n\nReturn both the boolean 'keep' (true if the review expresses dissatisfaction) and the 'topic' (Food, Service, or None).",
+      "model": "deepseek/deepseek-flash",
+      "litellm_completion_kwargs": {
+        "temperature": 0
+      },
+      "type": "map",
+      "output": {
+        "schema": {
+          "keep": "bool",
+          "topic": "string"
+        }
+      }
+    },
+    {
+      "name": "filter_fused_keep_complaints_classify_topic",
+      "type": "code_filter",
+      "code": "\ndef transform(input_doc):\n    return input_doc.get('keep', False)\n"
+    }
+  ],
+  "query_code": "def moar_query(frame: docetl.Frame) -> docetl.Frame:\n    \"\"\"The operations and prompt generated in the saved MOAR run.\"\"\"\n    frame = frame.map(\n        name='fused_keep_complaints_classify_topic',\n        prompt=\"\"\"Review: {{ input.text }}\n\nFirst, determine whether this review expresses dissatisfaction (true) or not (false). Then, if it expresses dissatisfaction, classify the complaint: return Food for food taste or cooking, or Service for staff attention or behavior. If it does not express dissatisfaction, return None for the topic.\n\nReturn both the boolean 'keep' (true if the review expresses dissatisfaction) and the 'topic' (Food, Service, or None).\"\"\",\n        model=MODEL_REF,\n        litellm_completion_kwargs={**OPTIONS, **{'temperature': 0}},\n        output={'schema': {'keep': 'bool', 'topic': 'string'}},\n    )\n    frame = frame.code_filter(\n        name='filter_fused_keep_complaints_classify_topic',\n        code=\"\"\"\ndef transform(input_doc):\n    return input_doc.get('keep', False)\n\"\"\",\n    )\n    return frame\n",
+  "portable_configuration": "Preserves generated operation sequence, prompts, schema and code; selected provider connection settings are supplied by OPTIONS and MODEL_REF.",
+  "original_filter_prompt": "Does this review express dissatisfaction? Review: {{ input.text }}",
+  "rewritten_filter_prompt": "Determine whether the following restaurant review expresses customer dissatisfaction — that is, whether it contains a complaint about the food (taste, cooking, quality, portion, temperature, freshness) or the service (staff attentiveness, behavior, speed, order accuracy).\n\nReview: {{ input.text }}\n\nGuidelines:\n- Answer true if the review expresses ANY negative opinion or complaint, even if it also contains positive comments (mixed reviews count as dissatisfaction).\n- Negative indicators include explicit dissatisfaction words (e.g., \"disappointed\", \"worst\", \"bad\", \"not good\", \"poor\", \"rude\", \"overcooked\", \"undercooked\", \"not seasoned\", \"far away from real\", \"doesn't even taste good\") and descriptions of problems with food or service (e.g., servers ignoring tables, wrong orders, long waits, unappetizing food).\n- Answer false if the review is purely positive (only praise for food, service, atmosphere, drinks, or specials) or is neutral with no complaints.\n- A single clear complaint is enough to answer true, even in an otherwise positive review.\n\nRespond with a boolean: true if the review expresses dissatisfaction (a complaint), false if it does not.",
+  "prompt_trial": "trial-3",
+  "prompt_origin": "A prompt-rewriting candidate from the same automatic MOAR search.",
+  "explanation": "MOAR combined the two model operations into one `map`: return both `keep` and `topic`. A `code_filter` then keeps rows whose `keep` value is true, without another model call. Read the two output fields before running the code.",
+  "historical_original_score": {
+    "accuracy": 0.5,
+    "correct": 3,
+    "total": 6,
+    "decisions": [
+      {
+        "doc_id": "R1",
+        "expected": null,
+        "actual": "Food",
+        "correct": false
+      },
+      {
+        "doc_id": "R2",
+        "expected": "Food",
+        "actual": "Food",
+        "correct": true
+      },
+      {
+        "doc_id": "R3",
+        "expected": null,
+        "actual": "Service",
+        "correct": false
+      },
+      {
+        "doc_id": "R4",
+        "expected": "Service",
+        "actual": "Service",
+        "correct": true
+      },
+      {
+        "doc_id": "R5",
+        "expected": "Food",
+        "actual": "Food",
+        "correct": true
+      },
+      {
+        "doc_id": "R6",
+        "expected": null,
+        "actual": "Food",
+        "correct": false
+      }
+    ]
+  },
+  "historical_rewritten_score": {
+    "accuracy": 1.0,
+    "correct": 6,
+    "total": 6,
+    "decisions": [
+      {
+        "doc_id": "R1",
+        "expected": null,
+        "actual": null,
+        "correct": true
+      },
+      {
+        "doc_id": "R2",
+        "expected": "Food",
+        "actual": "Food",
+        "correct": true
+      },
+      {
+        "doc_id": "R3",
+        "expected": null,
+        "actual": null,
+        "correct": true
+      },
+      {
+        "doc_id": "R4",
+        "expected": "Service",
+        "actual": "Service",
+        "correct": true
+      },
+      {
+        "doc_id": "R5",
+        "expected": "Food",
+        "actual": "Food",
+        "correct": true
+      },
+      {
+        "doc_id": "R6",
+        "expected": null,
+        "actual": null,
+        "correct": true
+      }
+    ]
+  },
+  "historical_prompt_score": {
+    "accuracy": 1.0,
+    "correct": 6,
+    "total": 6,
+    "decisions": [
+      {
+        "doc_id": "R1",
+        "expected": null,
+        "actual": null,
+        "correct": true
+      },
+      {
+        "doc_id": "R2",
+        "expected": "Food",
+        "actual": "Food",
+        "correct": true
+      },
+      {
+        "doc_id": "R3",
+        "expected": null,
+        "actual": null,
+        "correct": true
+      },
+      {
+        "doc_id": "R4",
+        "expected": "Service",
+        "actual": "Service",
+        "correct": true
+      },
+      {
+        "doc_id": "R5",
+        "expected": "Food",
+        "actual": "Food",
+        "correct": true
+      },
+      {
+        "doc_id": "R6",
+        "expected": null,
+        "actual": null,
+        "correct": true
+      }
+    ]
+  }
+}

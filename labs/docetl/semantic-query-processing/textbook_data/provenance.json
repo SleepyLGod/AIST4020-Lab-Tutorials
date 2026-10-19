@@ -1,0 +1,47 @@
+{
+  "dataset": "fancyzhx/yelp_polarity",
+  "revision": "bbf1c97a1f0cf005e5aded43839fd814654a1557",
+  "download_date": "2026-10-09",
+  "split": "train",
+  "selection": "Six complete short restaurant reviews chosen for readability and clear food/service examples, before any model run. Not a representative sample.",
+  "reference": "Sentiment is from the dataset; Food/Service topics are teaching annotations checked against the text.",
+  "publication": "Local draft. Dataset card does not specify redistribution permission; verify original Yelp terms before publishing review text.",
+  "rows": [
+    {
+      "doc_id": "R1",
+      "row_index": 14,
+      "source_label": 1,
+      "text_sha256": "be1a34bc80f47b3bf66a36ae380821e1af2e1fa33515d17d441136579610362e"
+    },
+    {
+      "doc_id": "R2",
+      "row_index": 48,
+      "source_label": 0,
+      "text_sha256": "ea9c94ca4e70334d9f83d6af11a466e10bc7276551a0e17fc8da499fc1c88dd2"
+    },
+    {
+      "doc_id": "R3",
+      "row_index": 164,
+      "source_label": 1,
+      "text_sha256": "1f01e1fbacf78f490feaffd6e732dfa58089cd41755f5a045541e64623d500f9"
+    },
+    {
+      "doc_id": "R4",
+      "row_index": 215,
+      "source_label": 0,
+      "text_sha256": "459c8f83ba8693094afea411def09ab9f869488b5e083cd3444ee46eb7dcd611"
+    },
+    {
+      "doc_id": "R5",
+      "row_index": 253,
+      "source_label": 0,
+      "text_sha256": "32db2a48986b0cb8c35ad615e5dcc01e385d7d9ea22cbc3a780dac18e7a24978"
+    },
+    {
+      "doc_id": "R6",
+      "row_index": 607,
+      "source_label": 1,
+      "text_sha256": "07c6e70a6447a1f0b6b15036d34f6a1f7408ce78213dcda9a66d8a8b360bfae2"
+    }
+  ]
+}

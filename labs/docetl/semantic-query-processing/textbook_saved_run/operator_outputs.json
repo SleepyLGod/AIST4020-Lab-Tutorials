@@ -1,0 +1,86 @@
+{
+  "filter": [
+    {
+      "doc_id": "R1",
+      "text": "Awesome drink specials during happy hour. Fantastic wings that are crispy and delicious, wing night on Tuesday and Thursday!"
+    },
+    {
+      "doc_id": "R2",
+      "text": "Far away from real Chinese food. Doesn't even taste good as American style Chinese food."
+    },
+    {
+      "doc_id": "R3",
+      "text": "I love this place!  Great atmosphere and friendly service every time I go!!"
+    },
+    {
+      "doc_id": "R4",
+      "text": "Servers are chatting, not paying attention to tables. I can see my salad is ready at the window. Worst serves ever."
+    },
+    {
+      "doc_id": "R5",
+      "text": "Was very disappointed with the food. It was overcooked and not seasoned very well"
+    }
+  ],
+  "map": [
+    {
+      "doc_id": "R1",
+      "text": "Awesome drink specials during happy hour. Fantastic wings that are crispy and delicious, wing night on Tuesday and Thursday!",
+      "issue": "Positive review: happy hour drink specials and crispy wings"
+    },
+    {
+      "doc_id": "R2",
+      "text": "Far away from real Chinese food. Doesn't even taste good as American style Chinese food.",
+      "issue": "Not authentic or good Chinese food"
+    },
+    {
+      "doc_id": "R3",
+      "text": "I love this place!  Great atmosphere and friendly service every time I go!!",
+      "issue": "No complaint; positive review"
+    },
+    {
+      "doc_id": "R4",
+      "text": "Servers are chatting, not paying attention to tables. I can see my salad is ready at the window. Worst serves ever.",
+      "issue": "Inattentive servers; slow service"
+    },
+    {
+      "doc_id": "R5",
+      "text": "Was very disappointed with the food. It was overcooked and not seasoned very well",
+      "issue": "Disappointing, poorly seasoned, overcooked food"
+    }
+  ],
+  "join": [
+    {
+      "doc_id": "R2",
+      "text": "Far away from real Chinese food. Doesn't even taste good as American style Chinese food.",
+      "issue": "Not authentic or good Chinese food",
+      "topic": "Food",
+      "definition": "Food taste or cooking."
+    },
+    {
+      "doc_id": "R4",
+      "text": "Servers are chatting, not paying attention to tables. I can see my salad is ready at the window. Worst serves ever.",
+      "issue": "Inattentive servers; slow service",
+      "topic": "Service",
+      "definition": "Staff attention or behavior."
+    },
+    {
+      "doc_id": "R5",
+      "text": "Was very disappointed with the food. It was overcooked and not seasoned very well",
+      "issue": "Disappointing, poorly seasoned, overcooked food",
+      "topic": "Food",
+      "definition": "Food taste or cooking."
+    }
+  ],
+  "reduce": [
+    {
+      "summary": "Reviewers describe the Chinese food as inauthentic and poor quality, citing disappointing, poorly seasoned, and overcooked dishes.",
+      "topic": "Food",
+      "_counts_prereduce_summarize_topics": 2
+    },
+    {
+      "summary": "Customers complain about inattentive servers and slow service.",
+      "topic": "Service",
+      "_counts_prereduce_summarize_topics": 1
+    }
+  ]
+}
