@@ -6,6 +6,6 @@ Student-facing materials live under `labs/`. Each notebook combines the lecture 
 
 ## Semantic Query Processing with DocETL
 
-Read the [student notebook](labs/docetl/semantic-query-processing/semantic_query_processing.ipynb) or [open it in Colab](https://colab.research.google.com/github/SleepyLGod/AIST4020-Lab-Tutorials/blob/main/labs/docetl/semantic-query-processing/semantic_query_processing.ipynb). The lab finds movie reviews with opposite overall opinions, compares two execution plans, and examines MOAR query optimization.
+Read the [student notebook](labs/docetl/semantic-query-processing/semantic_query_processing.ipynb). The lab uses six restaurant reviews to introduce semantic operators and compare queries rewritten by MOAR. The [company-report version](labs/docetl/semantic-query-processing/semantic_query_processing_company_reports.ipynb) is preserved as a reference.
 
-The notebook downloads the verified course setup ZIP from GitHub when needed. For offline local use, place [movie_lab_setup.zip](labs/docetl/semantic-query-processing/movie_lab_setup.zip?raw=true) beside the notebook. [Data sources and license](labs/docetl/semantic-query-processing/DATA_SOURCES.md) describe the teaching subset. The [full reference notebook](labs/docetl/semantic-query-processing/semantic_query_processing_full.ipynb) preserves the earlier, longer version.
+Open the [lab in Colab](https://colab.research.google.com/github/SleepyLGod/AIST4020-Lab-Tutorials/blob/main/labs/docetl/semantic-query-processing/semantic_query_processing.ipynb). The first setup cell downloads and verifies the matching course bundle automatically. See the [lab README](labs/docetl/semantic-query-processing/README.md) for setup and preserved versions.

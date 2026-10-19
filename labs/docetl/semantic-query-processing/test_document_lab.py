@@ -19,7 +19,7 @@ import nbformat
 import document_lab_support as support
 
 ROOT = Path(__file__).resolve().parent
-NB = nbformat.read(ROOT / 'semantic_query_processing.ipynb', as_version=4)
+NB = nbformat.read(ROOT / 'semantic_query_processing_company_reports.ipynb', as_version=4)
 
 
 def cell(tag: str) -> str:
