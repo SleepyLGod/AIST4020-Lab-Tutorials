@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import html
 import json
+import math
 from pathlib import Path
 import time
 from typing import Any
@@ -42,23 +44,148 @@ def show_decisions(rows: list[dict], reference: dict[str, str | None]) -> None:
     show_rows(display_rows, ['doc_id', 'expected', 'actual', 'correct'])
 
 
+def show_query_plans() -> Any:
+    """Draw the two query structures, not measured execution results."""
+    import matplotlib.pyplot as plt
+    from matplotlib.patches import FancyArrowPatch, Rectangle
+
+    fig, ax = plt.subplots(figsize=(11, 4.4))
+    fig.patch.set_facecolor('white')
+    ax.set(xlim=(0, 11), ylim=(0, 4.4))
+    ax.axis('off')
+    rows = [
+        (2.45, 'Original query',
+         [('filter', 'Is it a complaint?', 'Model'),
+          ('map', 'Food or Service?', 'Model')]),
+        (0.35, 'Saved MOAR rewrite',
+         [('map', 'Return keep and topic', 'Model'),
+          ('code_filter', 'Keep rows with keep=True', 'Python')]),
+    ]
+    for y, title, operations in rows:
+        ax.text(0.15, y + 1.5, title, fontsize=13, weight='bold', color='#222222')
+        ax.text(0.75, y + 0.65, 'Reviews', ha='center', va='center', fontsize=12)
+        for x, (operator, question, executor) in zip((2.2, 6.65), operations):
+            color = '#e4f2f0' if executor == 'Model' else '#fff0d6'
+            ax.add_patch(Rectangle((x, y), 3.65, 1.3,
+                                   facecolor=color, edgecolor='#777777', linewidth=1))
+            ax.text(x + 1.825, y + 1.02, operator, ha='center',
+                    fontsize=12, weight='bold')
+            ax.text(x + 1.825, y + 0.62, question, ha='center', fontsize=11)
+            ax.text(x + 1.825, y + 0.22, executor, ha='center',
+                    fontsize=10, color='#444444')
+        for left, right in ((1.45, 2.15), (5.9, 6.6)):
+            ax.add_patch(FancyArrowPatch((left, y + 0.65), (right, y + 0.65),
+                                        arrowstyle='-|>', mutation_scale=15,
+                                        color='#444444', linewidth=1.5))
+    fig.tight_layout(pad=0.5)
+    return fig
+
+
+def filter_prompt(query: Any) -> str:
+    """Read the filter prompt from the query that will actually run."""
+    import yaml
+    config = yaml.safe_load(query.to_yaml())
+    filters = [op for op in config['operations'] if op['type'] == 'filter']
+    if len(filters) != 1 or not isinstance(filters[0].get('prompt'), str):
+        raise ValueError('Expected one filter with a text prompt.')
+    return filters[0]['prompt']
+
+
 def compare(plans: list[dict], reference: dict) -> Any:
-    """Show current query results and measured work, without new requests."""
+    """Compare two current executions, without requesting model answers."""
     import document_lab_support as support
     import matplotlib.pyplot as plt
-    table = []
-    for plan in plans:
-        result = score(plan['rows'], reference)
-        table.append({'query': plan['id'], 'correct': f"{result['correct']}/{result['total']}",
-                      'accuracy': result['accuracy']})
-    support.show_rows(table, ['query', 'correct', 'accuracy'])
-    support.show_query_work(plans)
-    fig, ax = plt.subplots(figsize=(5, 2.5))
-    ax.bar([r['query'] for r in table], [r['accuracy'] for r in table], color=['#247d78', '#b05c40'])
-    ax.set(ylabel='Accuracy', ylim=(0, 1.12))
-    for i, row in enumerate(table):
-        ax.text(i, row['accuracy'] + .025, row['correct'], ha='center')
+    from IPython.display import HTML, display
+    from lab_support import measured_tokens
+
+    if len(plans) != 2:
+        raise ValueError('Compare the original query with one rewrite.')
+    results = [score(plan['rows'], reference) for plan in plans]
+    names = [str(plan['id']) for plan in plans]
+
+    def label(value: str | None) -> str:
+        return 'Excluded' if value is None else value
+
+    body = []
+    for left, right in zip(results[0]['decisions'], results[1]['decisions']):
+        changed = left['actual'] != right['actual']
+        cells = [left['doc_id'], label(left['expected']), label(left['actual']),
+                 label(right['actual']), 'Changed' if changed else 'Same']
+        style = ' style="background:#fff1c2;color:#202020"' if changed else ''
+        body.append(f'<tr{style}>' + ''.join(
+            f'<td style="padding:4px 10px">{html.escape(str(value))}</td>' for value in cells
+        ) + '</tr>')
+    headings = ['Review', 'Reference', *names, 'Decision']
+    display(HTML('<table><thead><tr>' + ''.join(
+        f'<th>{html.escape(value)}</th>' for value in headings
+    ) + '</tr></thead><tbody>' + ''.join(body) + '</tbody></table>'))
+    if all(a['actual'] == b['actual'] for a, b in
+           zip(results[0]['decisions'], results[1]['decisions'])):
+        print('Both queries made the same decisions.')
+
+    def number(value: Any) -> float | None:
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return None
+        return value if math.isfinite(value) and value >= 0 else None
+
+    inputs = [measured_tokens(p.get('token_usage'), 'prompt_tokens') for p in plans]
+    outputs = [measured_tokens(p.get('token_usage'), 'completion_tokens') for p in plans]
+    times = [number(p.get('execution_seconds')) for p in plans]
+    fig, axes = plt.subplots(1, 3, figsize=(11, 3.3))
+    colors = ['#247d78', '#b05c40']
+    for i, result in enumerate(results):
+        axes[0].bar(i, result['accuracy'], color=colors[i])
+        axes[0].text(i, result['accuracy'] + .025,
+                     f"{result['correct']}/{result['total']}", ha='center')
+    axes[0].set(title='Accuracy', ylabel='Correct / all reviews', ylim=(0, 1.15))
+
+    for values, offset, color, caption in [
+        (inputs, -.2, '#247d78', 'Input'), (outputs, .2, '#b05c40', 'Output')
+    ]:
+        for i, value in enumerate(values):
+            if value is None:
+                axes[1].text(i + offset, .04, 'Unknown', rotation=90, ha='center',
+                             va='bottom', transform=axes[1].get_xaxis_transform())
+            else:
+                axes[1].bar(i + offset, value, width=.36, color=color)
+                axes[1].annotate(f'{value:g}', (i + offset, value),
+                                 xytext=(0, 3), textcoords='offset points', ha='center', fontsize=8)
+        axes[1].plot([], [], color=color, linewidth=6, label=caption)
+    axes[1].set(title='Model tokens', ylabel='Tokens')
+    axes[1].legend(fontsize=8)
+
+    for i, value in enumerate(times):
+        if value is None:
+            axes[2].text(i, .04, 'Unknown', ha='center',
+                         transform=axes[2].get_xaxis_transform())
+        else:
+            axes[2].bar(i, value, color=colors[i])
+            axes[2].annotate(f'{value:.2f}', (i, value), xytext=(0, 3),
+                             textcoords='offset points', ha='center')
+    axes[2].set(title='Query time', ylabel='Seconds')
+    for ax in axes:
+        ax.set_xticks([0, 1], names)
+        ax.set_xlim(-.6, 1.6)
+    for ax in axes[1:]:
+        ax.set_ylim(bottom=0, top=max(ax.get_ylim()[1], 1) * 1.2)
     fig.tight_layout()
+
+    details = [{
+        'Query': names[i], 'Seconds': times[i], 'Input tokens': inputs[i],
+        'Output tokens': outputs[i],
+        'Estimated USD': number(plan.get('execution_cost_estimate_usd')),
+        'Cache': plan.get('cache'),
+    } for i, plan in enumerate(plans)]
+    details = [{key: 'Unknown' if value is None else value for key, value in row.items()}
+               for row in details]
+    display(HTML(
+        '<details><summary>Measurement details</summary>'
+        '<p>Tokens measure model usage, not dollars. Prices depend on the model; '
+        'USD values are SDK estimates. Query time includes provider response time. '
+        'These measurements cover query execution, not the earlier MOAR search. '
+        'Unknown values are left unplotted.</p>'
+        + support.table_html(details, list(details[0])) + '</details>'
+    ))
     return fig
 
 
