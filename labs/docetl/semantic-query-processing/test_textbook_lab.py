@@ -1,9 +1,12 @@
 """Offline checks for the active restaurant-review lab; no model calls."""
 import ast
+import copy
 import hashlib
 import io
 import importlib.util
 import json
+import subprocess
+import tempfile
 from contextlib import redirect_stdout
 from pathlib import Path
 import unittest
@@ -15,7 +18,7 @@ import textbook_lab_support as lesson
 
 ROOT = Path(__file__).parent
 REFERENCE = json.loads((ROOT/'textbook_data/reference.json').read_text())
-CORRECT = [{'doc_id': key, 'topic': value} for key, value in REFERENCE.items() if value]
+CORRECT = [{'review_id': key, 'topic': value} for key, value in REFERENCE.items() if value]
 
 
 class ScoringTests(unittest.TestCase):
@@ -26,7 +29,7 @@ class ScoringTests(unittest.TestCase):
         self.assertEqual(lesson.score(CORRECT[:-1], REFERENCE)['correct'], 5)
 
     def test_wrongly_retained(self) -> None:
-        self.assertEqual(lesson.score(CORRECT + [{'doc_id': 'R1', 'topic': 'Food'}], REFERENCE)['correct'], 5)
+        self.assertEqual(lesson.score(CORRECT + [{'review_id': 'R1', 'topic': 'Food'}], REFERENCE)['correct'], 5)
 
     def test_empty_is_scored(self) -> None:
         self.assertEqual(lesson.score([], REFERENCE)['correct'], 3)
@@ -37,8 +40,8 @@ class ScoringTests(unittest.TestCase):
         self.assertEqual(lesson.score(swapped, REFERENCE)['correct'], 4)
 
     def test_invalid_outputs(self) -> None:
-        for rows in [None, CORRECT+CORRECT[:1], [{'doc_id':'R7','topic':'Food'}],
-                     [{'doc_id':'R2'}], [{'doc_id':'R2','topic':'Other'}]]:
+        for rows in [None, CORRECT+CORRECT[:1], [{'review_id':'R7','topic':'Food'}],
+                     [{'review_id':'R2'}], [{'review_id':'R2','topic':'Other'}]]:
             with self.subTest(rows=rows), self.assertRaises(ValueError):
                 lesson.score(rows, REFERENCE)
 
@@ -64,9 +67,9 @@ class ArtifactTests(unittest.TestCase):
         reviews = json.loads((ROOT/'textbook_data/reviews.json').read_text())
         provenance = json.loads((ROOT/'textbook_data/provenance.json').read_text())
         self.assertEqual(len(reviews), 6)
-        self.assertEqual({r['doc_id'] for r in reviews}, set(REFERENCE))
+        self.assertEqual({r['review_id'] for r in reviews}, set(REFERENCE))
         for row, source in zip(reviews, provenance['rows']):
-            self.assertEqual(set(row), {'doc_id', 'text'})
+            self.assertEqual(set(row), {'review_id', 'text'})
             self.assertEqual(hashlib.sha256(row['text'].encode()).hexdigest(), source['text_sha256'])
 
     def test_notebook(self) -> None:
@@ -77,7 +80,8 @@ class ArtifactTests(unittest.TestCase):
                 self.assertEqual(cell['outputs'], [])
                 self.assertIsNone(cell['execution_count'])
         source = '\n'.join(''.join(c['source']) for c in notebook['cells'])
-        self.assertIn('ENABLE_MODEL_CALLS = False', source)
+        self.assertIn("backend = 'ollama'", source)
+        self.assertIn('lesson.require_colab_gpu(backend, IN_COLAB)', source)
         self.assertIn('RUN_MOAR = False', source)
         self.assertNotIn('/Users/von', source)
         self.assertNotIn('DataNeed', source)
@@ -113,11 +117,11 @@ class ArtifactTests(unittest.TestCase):
                 self.operations.append({'type': 'code_filter', **kwargs})
                 return self
 
-        namespace = {'docetl': SimpleNamespace(Frame=Frame), 'MODEL_REF': saved['model'], 'OPTIONS': {}}
+        namespace = {'reviews_df': Frame(), 'MODEL_REF': saved['model'], 'OPTIONS': {}}
         notebook = json.loads((ROOT/'semantic_query_processing.ipynb').read_text())
         code = next(''.join(c['source']) for c in notebook['cells'] if c['id'] == 'textbook-25')
         exec(compile(code, '<visible query>', 'exec'), namespace)
-        actual = namespace['moar_query'](Frame()).operations
+        actual = namespace['optimized_query'].operations
         self.assertEqual([op['name'] for op in actual], ['classify_review', 'keep_complaints'])
         expected = [{k: v for k, v in op.items() if k != 'name'} for op in saved['operations']]
         expected[0]['prompt'] = expected[0]['prompt'].replace(
@@ -149,6 +153,258 @@ class ArtifactTests(unittest.TestCase):
                 self.assertTrue(valid, errors)
 
 
+class QueryTests(unittest.TestCase):
+    """Check real Frame construction and template inputs without executing a model."""
+
+    def setUp(self) -> None:
+        self.notebook = json.loads((ROOT/'semantic_query_processing.ipynb').read_text())
+        self.cells = {c['id']: ''.join(c['source']) for c in self.notebook['cells']}
+        self.reviews = json.loads((ROOT/'textbook_data/reviews.json').read_text())
+
+    def definitions(self) -> dict:
+        """Load only the visible operator dictionaries, not their execution cells."""
+        namespace = {'OPTIONS': {'temperature': 0}}
+        for cell_id in ['textbook-08', 'textbook-10', 'textbook-16']:
+            tree = ast.parse(self.cells[cell_id])
+            exec(compile(ast.Module(body=[tree.body[0]], type_ignores=[]),
+                         '<operator config>', 'exec'), namespace)
+        return namespace
+
+    def test_parts_and_removed_experiments(self) -> None:
+        markdown = '\n'.join(''.join(c['source']) for c in self.notebook['cells']
+                             if c['cell_type'] == 'markdown')
+        headings = [line for line in markdown.splitlines() if line.startswith('## ')]
+        self.assertEqual(headings, [
+            '## Part 1: Load the Review Data',
+            '## Part 2: Semantic Operators and Queries',
+            '## Part 3: Query Optimization with MOAR',
+        ])
+        code = '\n'.join(''.join(c['source']) for c in self.notebook['cells']
+                         if c['cell_type'] == 'code')
+        for removed in ['equijoin', 'describe_issue', 'match_topics', 'prompt_query',
+                        'rewritten_filter_prompt', 'doc_id']:
+            self.assertNotIn(removed, code)
+        self.assertNotIn('Look Inside Prompt Rewriting', markdown)
+        self.assertIn('one earlier MOAR run', markdown)
+
+    def test_templates_read_reviews_and_grouped_text(self) -> None:
+        from jinja2 import Environment, StrictUndefined
+        templates = Environment(undefined=StrictUndefined)
+        definitions = self.definitions()
+        r4 = next(r for r in self.reviews if r['review_id'] == 'R4')
+        for name in ['review_filter', 'classify_map']:
+            text = templates.from_string(definitions[name]['prompt']).render(input=r4)
+            self.assertIn(r4['text'], text)
+        grouped = [r for r in self.reviews if REFERENCE[r['review_id']] == 'Food']
+        text = templates.from_string(definitions['summary_reduce']['prompt']).render(inputs=grouped)
+        self.assertTrue(all(r['text'] in text for r in grouped))
+        self.assertNotIn(r4['text'], text)
+        self.assertEqual(definitions['summary_reduce']['reduce_key'], 'topic')
+
+    @unittest.skipUnless(importlib.util.find_spec('docetl'), 'Requires DocETL')
+    def test_real_frame_chains_share_the_same_prefix(self) -> None:
+        import docetl
+        import yaml
+        namespace = self.definitions()
+        namespace['reviews_df'] = docetl.from_list(self.reviews, name='reviews')
+        with patch.object(docetl.Frame, 'collect', side_effect=AssertionError('No model execution')):
+            exec(self.cells['textbook-18'], namespace)
+            exec(self.cells['textbook-20'], namespace)
+        full = yaml.safe_load(namespace['query'].to_yaml())
+        original = yaml.safe_load(namespace['original_query'].to_yaml())
+        self.assertEqual([o['type'] for o in full['operations']], ['filter', 'map', 'reduce'])
+        self.assertEqual(original['operations'], full['operations'][:2])
+        self.assertEqual(yaml.safe_load(namespace['reviews_df'].to_yaml())['operations'], [])
+        for operation in full['operations']:
+            self.assertEqual(operation['litellm_completion_kwargs'], namespace['OPTIONS'])
+        self.assertEqual(full['operations'][2]['reduce_key'], 'topic')
+
+    def test_optional_search_is_off(self) -> None:
+        search = SimpleNamespace(run_search=unittest.mock.Mock(
+            side_effect=AssertionError('No optimization requests')))
+        exec(self.cells['textbook-28'], {'lesson': search})
+        search.run_search.assert_not_called()
+
+    @unittest.skipUnless(importlib.util.find_spec('docetl'), 'Requires DocETL')
+    def test_reduce_groups_original_review_text_without_model_calls(self) -> None:
+        from docetl.operations.reduce import ReduceOperation
+        from rich.console import Console
+        config = {'type': 'reduce', **self.definitions()['summary_reduce']}
+        operation = ReduceOperation(SimpleNamespace(config={}), config, 'offline/model', 1,
+                                    console=Console(file=io.StringIO()))
+        classified = [dict(row, topic=REFERENCE[row['review_id']]) for row in self.reviews
+                      if REFERENCE[row['review_id']]]
+        with patch.object(operation, '_maybe_build_retrieval_context', return_value=''), \
+                patch.object(operation, '_batch_reduce', return_value=(
+                    {'summary': 'Synthetic offline fixture'}, 'offline prompt', 0.0)) as reduce:
+            results, _ = operation.execute(classified)
+        groups = [call.args[1] for call in reduce.call_args_list]
+        self.assertEqual({frozenset(r['review_id'] for r in group) for group in groups},
+                         {frozenset({'R2', 'R5'}), frozenset({'R4'})})
+        originals = {r['review_id']: r['text'] for r in self.reviews}
+        self.assertTrue(all(r['text'] == originals[r['review_id']] for g in groups for r in g))
+        self.assertEqual(len(results), 2)
+
+
+class ClassificationChecks(unittest.TestCase):
+    """Regression fixtures for malformed labels and incomplete map results."""
+
+    def setUp(self) -> None:
+        self.inputs = [{'review_id': 'R2', 'text': 'Offline food complaint'},
+                       {'review_id': 'R4', 'text': 'Offline service complaint'}]
+        self.outputs = [dict(row, topic=topic) for row, topic in
+                        zip(self.inputs, ['Food', 'Service'])]
+
+    def test_valid_reordered_output_and_empty_input(self) -> None:
+        lesson.check_classifications(self.inputs, list(reversed(self.outputs)))
+        lesson.check_classifications([], [])
+
+    def test_long_labels_are_rejected_without_repair(self) -> None:
+        for label in ['Food for food taste or cooking',
+                      'Food for food taste or cooking, or Service for staff attention or behavior. '
+                      'The complaint in this review is about the Food (taste).',
+                      'food', ' Food ', '', None, ['Food']]:
+            output = copy.deepcopy(self.outputs)
+            output[0]['topic'] = label
+            before = copy.deepcopy(output)
+            with self.subTest(label=label), self.assertRaisesRegex(ValueError, 'Invalid topic for R2'):
+                lesson.check_classifications(self.inputs, output)
+            self.assertEqual(output, before)
+
+    def test_missing_duplicate_unknown_and_malformed_records(self) -> None:
+        for output in [[], self.outputs[:1], self.outputs+self.outputs[:1],
+                       [dict(self.outputs[0], review_id='R9'), self.outputs[1]],
+                       [{'topic': 'Food'}, self.outputs[1]],
+                       [dict(self.outputs[0], review_id=[]), self.outputs[1]],
+                       [dict(self.outputs[0], text='Changed'), self.outputs[1]],
+                       [dict(self.inputs[0]), self.outputs[1]], None]:
+            with self.subTest(output=output), self.assertRaises(ValueError):
+                lesson.check_classifications(self.inputs, output)
+
+    def test_fused_map_checks_excluded_rows_before_code_filter(self) -> None:
+        output = [dict(self.inputs[0], keep=True, topic='Food'),
+                  dict(self.inputs[1], keep=False, topic='Excluded')]
+        lesson.check_classifications(self.inputs, output, fused=True)
+        for keep, topic in [(False, 'Food'), (True, 'Excluded'), ('false', 'Excluded')]:
+            bad = [output[0], dict(self.inputs[1], keep=keep, topic=topic)]
+            with self.subTest(keep=keep, topic=topic), self.assertRaises(ValueError):
+                lesson.check_classifications(self.inputs, bad, fused=True)
+
+
+@unittest.skipUnless(importlib.util.find_spec('docetl'), 'Requires DocETL')
+class CheckedExecutionTests(unittest.TestCase):
+    """Use the real runner and chains, but replace operation responses with offline fixtures."""
+
+    def setUp(self) -> None:
+        import docetl
+        notebook = json.loads((ROOT/'semantic_query_processing.ipynb').read_text())
+        self.cells = {c['id']: ''.join(c['source']) for c in notebook['cells']}
+        self.reviews = json.loads((ROOT/'textbook_data/reviews.json').read_text())
+        self.kept = [row for row in self.reviews if REFERENCE[row['review_id']]]
+        self.classified = [dict(row, topic=REFERENCE[row['review_id']]) for row in self.kept]
+        namespace = {'OPTIONS': {}}
+        for cell_id in ['textbook-08', 'textbook-10', 'textbook-16']:
+            tree = ast.parse(self.cells[cell_id])
+            exec(compile(ast.Module(body=[tree.body[0]], type_ignores=[]), '<config>', 'exec'), namespace)
+        self.configs = namespace
+        namespace['reviews_df'] = docetl.from_list(self.reviews, name='reviews')
+        exec(self.cells['textbook-18'], namespace)
+        exec(self.cells['textbook-20'], namespace)
+        self.query, self.original = namespace['query'], namespace['original_query']
+
+    def run_chain(self, output: list[dict], *, fresh: bool = False) -> tuple[object, object]:
+        from docetl.operations.filter import FilterOperation
+        from docetl.operations.map import MapOperation
+        from docetl.operations.reduce import ReduceOperation
+        from docetl.operations.utils.api import APIWrapper
+        with patch.object(FilterOperation, 'execute', return_value=(self.kept, 0)), \
+                patch.object(MapOperation, 'execute', return_value=(output, 0)), \
+                patch.object(ReduceOperation, 'execute', return_value=([], 0)) as reduce, \
+                patch.object(APIWrapper, 'call_llm', side_effect=AssertionError('No model calls')), \
+                redirect_stdout(io.StringIO()):
+            try:
+                if fresh:
+                    directory = Path(tempfile.mkdtemp(prefix='docetl-checked-offline-'))
+                    result = lesson.collect_fresh(self.original, self.reviews, 'offline/model', directory)
+                else:
+                    result = lesson.collect_checked(self.query)
+            except ValueError:
+                reduce.assert_not_called()
+                raise
+        return result, reduce
+
+    def test_invalid_map_stops_real_chain_before_reduce(self) -> None:
+        from docetl.runner import DSLRunner
+        original_runner = DSLRunner._run_operation
+        cases = [[], self.classified[:-1], self.classified+self.classified[:1],
+                 [dict(self.classified[0], topic='Food for food taste or cooking'),
+                  *self.classified[1:]]]
+        for output in cases:
+            with self.subTest(output=output), self.assertRaises(ValueError):
+                self.run_chain(output)
+            self.assertIs(DSLRunner._run_operation, original_runner)
+
+    def test_valid_map_reaches_reduce_with_identical_rows(self) -> None:
+        result, reduce = self.run_chain(self.classified)
+        self.assertEqual(result, [])
+        self.assertEqual(reduce.call_args.args[0], self.classified)
+
+    def test_unchecked_frame_memo_cannot_bypass_validation(self) -> None:
+        key = self.query._memo_key(self.query._build_config(checkpoint=False))
+        self.query._memo = (key, [{'summary': 'Unchecked cached result'}], 0, {})
+        with self.assertRaisesRegex(ValueError, 'missing='):
+            self.run_chain([])
+
+    def test_comparison_collection_rejects_missing_classifications(self) -> None:
+        with self.assertRaisesRegex(ValueError, 'missing='):
+            self.run_chain(self.classified[:-1], fresh=True)
+
+    def test_standalone_reduce_rejects_long_labels(self) -> None:
+        import docetl
+        from docetl.operations.reduce import ReduceOperation
+        bad = [dict(self.classified[0], topic='Food for food taste or cooking')]
+        query = docetl.from_list(bad).reduce(**self.configs['summary_reduce'])
+        with patch.object(ReduceOperation, 'execute') as reduce, redirect_stdout(io.StringIO()):
+            with self.assertRaisesRegex(ValueError, 'Invalid topic'):
+                lesson.collect_checked(query)
+        reduce.assert_not_called()
+
+    def test_notebook_uses_checked_collection_in_all_aggregation_paths(self) -> None:
+        for cell_id in ['textbook-10', 'textbook-16', 'textbook-18']:
+            tree = ast.parse(self.cells[cell_id])
+            calls = [n.func.attr for n in ast.walk(tree)
+                     if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)]
+            self.assertIn('collect_checked', calls)
+            self.assertNotIn('collect', calls)
+
+
+class SetupTests(unittest.TestCase):
+    def test_no_gpu_probe_for_api_or_local_execution(self) -> None:
+        with patch('textbook_lab_support.subprocess.run') as run:
+            lesson.require_colab_gpu('deepseek', True)
+            lesson.require_colab_gpu('ollama', False)
+            lesson.require_colab_gpu('custom', True)
+        run.assert_not_called()
+
+    def test_colab_gpu_available(self) -> None:
+        with patch('textbook_lab_support.subprocess.run',
+                   return_value=SimpleNamespace(stdout='Tesla T4\n')) as run:
+            lesson.require_colab_gpu('ollama', True)
+        self.assertEqual(run.call_args.args[0][0], 'nvidia-smi')
+
+    def test_colab_gpu_missing_or_unavailable(self) -> None:
+        for error in [FileNotFoundError(), subprocess.CalledProcessError(1, 'nvidia-smi'),
+                      subprocess.TimeoutExpired('nvidia-smi', 10)]:
+            with self.subTest(error=type(error).__name__), \
+                    patch('textbook_lab_support.subprocess.run', side_effect=error), \
+                    self.assertRaisesRegex(RuntimeError, 'T4 GPU'):
+                lesson.require_colab_gpu('ollama', True)
+        with patch('textbook_lab_support.subprocess.run',
+                   return_value=SimpleNamespace(stdout='')), \
+                self.assertRaisesRegex(RuntimeError, 'T4 GPU'):
+            lesson.require_colab_gpu('ollama', True)
+
+
 class ComparisonTests(unittest.TestCase):
     """Exercise displays with synthetic offline results, not model answers."""
 
@@ -176,39 +432,6 @@ class ComparisonTests(unittest.TestCase):
             extent = text.get_window_extent(figure.canvas.get_renderer())
             self.assertTrue(bounds.contains(extent.x0, extent.y0))
             self.assertTrue(bounds.contains(extent.x1, extent.y1))
-
-    def test_displayed_prompt_comes_from_executed_query(self) -> None:
-        notebook = json.loads((ROOT/'semantic_query_processing.ipynb').read_text())
-        by_id = {c['id']: ''.join(c['source']) for c in notebook['cells']}
-
-        class Frame:
-            def __init__(self) -> None:
-                self.operations = []
-
-            def filter(self, **kwargs: object) -> 'Frame':
-                self.operations.append({'type': 'filter', **kwargs})
-                return self
-
-            def map(self, **kwargs: object) -> 'Frame':
-                self.operations.append({'type': 'map', **kwargs})
-                return self
-
-            def to_yaml(self) -> str:
-                return json.dumps({'operations': self.operations})
-
-        namespace = {'docetl': SimpleNamespace(Frame=Frame, from_list=lambda *a, **k: Frame()),
-                     'OPTIONS': {}, 'reviews': [], 'lesson': lesson,
-                     'saved_run': {'rewritten_filter_prompt': 'Offline test rewrite'}}
-        tree = ast.parse(by_id['textbook-08'])
-        exec(compile(ast.Module(body=[tree.body[0]], type_ignores=[]), '<filter>', 'exec'), namespace)
-        exec(by_id['textbook-20'], namespace)
-        with redirect_stdout(io.StringIO()) as output:
-            exec(by_id['textbook-30'], namespace)
-        executed_prompt = namespace['original_query'].operations[0]['prompt']
-        self.assertEqual(namespace['original_prompt'], executed_prompt)
-        self.assertIn(executed_prompt, output.getvalue())
-        with self.assertRaises(ValueError):
-            lesson.filter_prompt(Frame())
 
     def test_changed_rows_charts_and_escaped_text(self) -> None:
         wrong = [dict(row) for row in CORRECT]
