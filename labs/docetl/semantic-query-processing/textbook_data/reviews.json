@@ -1,26 +1,26 @@
 [
   {
-    "doc_id": "R1",
+    "review_id": "R1",
     "text": "Awesome drink specials during happy hour. Fantastic wings that are crispy and delicious, wing night on Tuesday and Thursday!"
   },
   {
-    "doc_id": "R2",
+    "review_id": "R2",
     "text": "Far away from real Chinese food. Doesn't even taste good as American style Chinese food."
   },
   {
-    "doc_id": "R3",
+    "review_id": "R3",
     "text": "I love this place!  Great atmosphere and friendly service every time I go!!"
   },
   {
-    "doc_id": "R4",
+    "review_id": "R4",
     "text": "Servers are chatting, not paying attention to tables. I can see my salad is ready at the window. Worst serves ever."
   },
   {
-    "doc_id": "R5",
+    "review_id": "R5",
     "text": "Was very disappointed with the food. It was overcooked and not seasoned very well"
   },
   {
-    "doc_id": "R6",
+    "review_id": "R6",
     "text": "Good food"
   }
 ]

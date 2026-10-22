@@ -2,15 +2,118 @@
 from __future__ import annotations
 
 import copy
+from contextlib import contextmanager
 import hashlib
 import html
 import json
 import math
+import subprocess
 from pathlib import Path
 import time
-from typing import Any
+from typing import Any, Iterator
 from unittest.mock import patch
 import uuid
+
+
+def require_colab_gpu(backend: str, in_colab: bool) -> None:
+    """Check the default Colab setup before downloading a local chat model."""
+    if backend != 'ollama' or not in_colab:
+        return
+    message = (
+        'For Ollama in Colab, select Runtime > Change runtime type > T4 GPU, '
+        'then rerun the notebook from the top.'
+    )
+    try:
+        result = subprocess.run(
+            ['nvidia-smi', '--query-gpu=name', '--format=csv,noheader'],
+            check=True, capture_output=True, text=True, timeout=10,
+        )
+    except (FileNotFoundError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+        raise RuntimeError(message) from exc
+    if not result.stdout.strip():
+        raise RuntimeError(message)
+
+
+def check_classifications(inputs: list[dict], outputs: list[dict], *, fused: bool = False) -> None:
+    """Require one unchanged review per input and exact classification labels."""
+    def index(rows: list[dict], label: str) -> dict[str, dict]:
+        if not isinstance(rows, list):
+            raise ValueError(f'{label} must be a list of review records.')
+        indexed = {}
+        for row in rows:
+            if not isinstance(row, dict) or not isinstance(row.get('review_id'), str):
+                raise ValueError(f'{label} contains a missing or invalid review_id.')
+            key = row['review_id']
+            if not key or key in indexed:
+                raise ValueError(f'{label} contains an empty or duplicate review_id: {key!r}.')
+            indexed[key] = row
+        return indexed
+
+    expected, actual = index(inputs, 'Map input'), index(outputs, 'Map output')
+    if expected.keys() != actual.keys():
+        raise ValueError(
+            f'Classification lost or added reviews: missing={sorted(expected.keys() - actual.keys())}, '
+            f'unknown={sorted(actual.keys() - expected.keys())}.'
+        )
+    for key, row in actual.items():
+        if row.get('text') != expected[key].get('text'):
+            raise ValueError(f'Classification changed the original text for {key}.')
+        allowed = {'Food', 'Service'}
+        if fused:
+            if type(row.get('keep')) is not bool:
+                raise ValueError(f'Classification for {key} needs a boolean keep value.')
+            if not row['keep']:
+                allowed = {'Excluded'}
+        if not isinstance(row.get('topic'), str) or row['topic'] not in allowed:
+            raise ValueError(f'Invalid topic for {key}: {row.get("topic")!r}; expected {sorted(allowed)}.')
+
+
+@contextmanager
+def _review_output_checks() -> Iterator[None]:
+    """Check the pinned runner's map boundary before downstream operations run."""
+    from docetl.runner import DSLRunner
+    run_operation = DSLRunner._run_operation
+
+    def checked(runner: Any, op_config: dict, input_data: Any, return_instance: bool = False,
+                is_build: bool = False) -> Any:
+        config, inputs = op_config, input_data
+        schema = config.get('output', {}).get('schema', {})
+        classification = config['type'] in {'map', 'parallel_map', 'code_map'} and 'topic' in schema
+        # Snapshot before execution: an operation must not hide lost or changed input rows.
+        expected = copy.deepcopy(inputs) if classification else None
+        if config['type'] == 'reduce' and config.get('reduce_key') in ('topic', ['topic']):
+            check_classifications(inputs, inputs)
+        result = run_operation(runner, config, inputs, return_instance, is_build)
+        if classification:
+            outputs = result[0] if return_instance else result
+            check_classifications(expected, outputs, fused='keep' in schema)
+        return result
+
+    with patch.object(DSLRunner, '_run_operation', checked):
+        yield
+
+
+def _collect_checked(query: Any) -> tuple[list[dict], dict]:
+    """Run checks on every operation; do not reuse unchecked Frame/checkpoint results."""
+    # These two private Frame methods are pinned to DocETL 0.3.0. Model-response
+    # caching still follows the query settings; only whole-result reuse is bypassed.
+    frame = query._copy()
+    started = time.perf_counter()
+    with _review_output_checks():
+        rows, _ = frame._execute(checkpoint=False)
+    cost = frame.total_cost
+    known_cost = isinstance(cost, (int, float)) and not isinstance(cost, bool) and math.isfinite(cost) and cost > 0
+    return rows, {
+        'execution_seconds': time.perf_counter() - started,
+        'execution_cost_estimate_usd': cost if known_cost else None,
+        'token_usage': copy.deepcopy(frame.token_usage),
+        'cache': 'Model-response cache follows query settings; operation checkpoints disabled',
+    }
+
+
+def collect_checked(query: Any) -> list[dict]:
+    """Collect a review query, rejecting invalid classifications before aggregation."""
+    return _collect_checked(query)[0]
 
 
 def score(rows: list[dict], reference: dict[str, str | None]) -> dict:
@@ -19,15 +122,15 @@ def score(rows: list[dict], reference: dict[str, str | None]) -> dict:
         raise ValueError('Query output must be a list.')
     indexed = {}
     for row in rows:
-        if not isinstance(row, dict) or row.get('doc_id') not in reference:
+        if not isinstance(row, dict) or row.get('review_id') not in reference:
             raise ValueError('Unknown or missing review ID.')
-        key = row['doc_id']
+        key = row['review_id']
         if key in indexed:
             raise ValueError(f'Duplicate review ID: {key}')
         if row.get('topic') not in {'Food', 'Service'}:
             raise ValueError(f'Invalid or missing topic for {key}.')
         indexed[key] = row['topic']
-    decisions = [{'doc_id': key, 'expected': value, 'actual': indexed.get(key),
+    decisions = [{'review_id': key, 'expected': value, 'actual': indexed.get(key),
                   'correct': value == indexed.get(key)} for key, value in reference.items()]
     correct = sum(row['correct'] for row in decisions)
     return {'accuracy': correct / len(reference), 'correct': correct,
@@ -41,7 +144,7 @@ def show_decisions(rows: list[dict], reference: dict[str, str | None]) -> None:
     display_rows = [dict(row, expected='Excluded' if row['expected'] is None else row['expected'],
                          actual='Excluded' if row['actual'] is None else row['actual'])
                     for row in decisions]
-    show_rows(display_rows, ['doc_id', 'expected', 'actual', 'correct'])
+    show_rows(display_rows, ['review_id', 'expected', 'actual', 'correct'])
 
 
 def show_query_plans() -> Any:
@@ -81,16 +184,6 @@ def show_query_plans() -> Any:
     return fig
 
 
-def filter_prompt(query: Any) -> str:
-    """Read the filter prompt from the query that will actually run."""
-    import yaml
-    config = yaml.safe_load(query.to_yaml())
-    filters = [op for op in config['operations'] if op['type'] == 'filter']
-    if len(filters) != 1 or not isinstance(filters[0].get('prompt'), str):
-        raise ValueError('Expected one filter with a text prompt.')
-    return filters[0]['prompt']
-
-
 def compare(plans: list[dict], reference: dict) -> Any:
     """Compare two current executions, without requesting model answers."""
     import document_lab_support as support
@@ -109,7 +202,7 @@ def compare(plans: list[dict], reference: dict) -> Any:
     body = []
     for left, right in zip(results[0]['decisions'], results[1]['decisions']):
         changed = left['actual'] != right['actual']
-        cells = [left['doc_id'], label(left['expected']), label(left['actual']),
+        cells = [left['review_id'], label(left['expected']), label(left['actual']),
                  label(right['actual']), 'Changed' if changed else 'Same']
         style = ' style="background:#fff1c2;color:#202020"' if changed else ''
         body.append(f'<tr{style}>' + ''.join(
@@ -211,17 +304,16 @@ def collect_fresh(query: Any, reviews: list[dict], model: str, directory: Path) 
     """Execute a comparison query without reusing cached model answers."""
     import docetl
     import yaml
-    from document_lab_support import collect_measured
     config, _ = freeze(query, reviews, model, directory.resolve())
     path = directory / 'query.yaml'
     path.write_text(yaml.safe_dump(config, sort_keys=False))
-    rows, work = collect_measured(docetl.Frame.from_yaml(str(path)))
+    rows, work = _collect_checked(docetl.Frame.from_yaml(str(path)))
     work['cache'] = 'Query cache bypassed'
     return rows, work
 
 
 def run_search(query: Any, reviews: list[dict], reference: dict, model: str,
-               run_dir: Path, *, enabled: bool = False, prompt_only: bool = False) -> dict | None:
+               run_dir: Path, *, enabled: bool = False) -> dict | None:
     """Run a small real MOAR search in Colab; retain failed candidates as failures."""
     if not enabled:
         return None
@@ -235,12 +327,12 @@ def run_search(query: Any, reviews: list[dict], reference: dict, model: str,
     from lab_support import make_json_adapter, moar_response_format, check_record_secrets
     from document_lab_support import _check_candidate, _moar_tool_options, optimizer_context
 
-    folder = (run_dir / ('prompt' if prompt_only else 'search') / uuid.uuid4().hex[:8]).resolve()
+    folder = (run_dir / 'search' / uuid.uuid4().hex[:8]).resolve()
     original, data_path = freeze(query, reviews, model, folder)
     input_hash = hashlib.sha256(data_path.read_bytes()).hexdigest()
     config_path = folder / 'original.yaml'
     config_path.write_text(yaml.safe_dump(original, sort_keys=False))
-    record = {'format': 'docetl-textbook-search-v1', 'kind': 'prompt_rewriting' if prompt_only else 'moar_search',
+    record = {'format': 'docetl-textbook-search-v2', 'kind': 'moar_search',
               'model': model, 'input_sha256': input_hash, 'plans': [], 'status': 'running',
               'strategies': ['clarify_instructions', 'operator_fusion'], 'search_seconds': None}
     by_output = {}
@@ -257,7 +349,8 @@ def run_search(query: Any, reviews: list[dict], reference: dict, model: str,
                 raise ValueError('Input records changed.')
             output_path = str(Path(config['pipeline']['output']['path']).resolve())
             by_output[output_path] = entry
-            cost = execute(node, max_threads=1)
+            with _review_output_checks():
+                cost = execute(node, max_threads=1)
             if cost == -1:
                 raise RuntimeError('Candidate failed to execute.')
             entry['execution_cost_estimate_usd'] = cost if cost > 0 else None
@@ -288,25 +381,11 @@ def run_search(query: Any, reviews: list[dict], reference: dict, model: str,
         with patch.object(optimizer, 'ALL_DIRECTIVES', allowed), optimizer_context(model, run_dir), \
                 patch('lab_support.make_json_adapter', adapter), moar_response_format(model), \
                 patch.object(Node, 'execute_plan', guarded):
-            if prompt_only:
-                from docetl.reasoning_optimizer.directives.clarify_instructions import ClarifyInstructionsDirective
-                operations, _, cost = ClarifyInstructionsDirective().instantiate(
-                    operators=copy.deepcopy(original['operations']), target_ops=[original['operations'][0]['name']],
-                    agent_llm=model, message_history=[], global_default_model=model,
-                    input_file_path=str(data_path), pipeline_code=original)
-                candidate = copy.deepcopy(original)
-                candidate['operations'] = operations
-                path = folder / 'rewritten.yaml'
-                path.write_text(yaml.safe_dump(candidate, sort_keys=False))
-                Node(str(path)).execute_plan(max_threads=1)
-                evaluate(candidate['pipeline']['output']['path'])
-                record['rewrite_cost_estimate_usd'] = cost if cost > 0 else None
-            else:
-                result = docetl.Frame.from_yaml(str(config_path)).optimize(
-                    eval_fn=evaluate, metric_key='accuracy', models=[model], agent_model=model,
-                    max_iterations=2, max_concurrent_agents=1, max_threads=1,
-                    dataset_path=str(data_path), save_dir=str(folder))
-                record['sdk_search_cost_estimate_usd'] = result.search_results.total_search_cost
+            result = docetl.Frame.from_yaml(str(config_path)).optimize(
+                eval_fn=evaluate, metric_key='accuracy', models=[model], agent_model=model,
+                max_iterations=2, max_concurrent_agents=1, max_threads=1,
+                dataset_path=str(data_path), save_dir=str(folder))
+            record['sdk_search_cost_estimate_usd'] = result.search_results.total_search_cost
         record['status'] = 'completed'
     except Exception as exc:
         record.update(status='failed', error=f'{type(exc).__name__}: {exc}')
