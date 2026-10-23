@@ -491,7 +491,7 @@ class NotebookTests(unittest.TestCase):
                 self.assertIn("/blob/v1.18.34/" + repo_path, "".join(cell["source"]))
                 verified_paths.add(ref["path"])
         self.assertEqual(verified_paths, {
-            "cli/cmd/run.ts", "session/llm.ts", "session/tools.ts", "tool/read.ts",
+            "cli/cmd/run.ts", "session/llm.ts", "session/llm/request.ts", "session/tools.ts", "tool/read.ts",
             "session/processor.ts", "session/prompt.ts", "session/message-v2.ts",
         })
 
