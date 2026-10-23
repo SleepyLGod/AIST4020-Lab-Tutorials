@@ -190,6 +190,8 @@ def write_configuration(root: Path, env: dict[str, str], selected: Mapping[str, 
                                           "limit": {"context": context_tokens, "output": output_tokens}}},
         }},
     }
+    if provider == "ollama":
+        config["provider"]["course"]["models"][selected["model"]]["options"] = {"reasoningEffort": "none"}
     config_path = root / "opencode.json"
     save_json(config_path, config, redact)
     env["OPENCODE_CONFIG"] = str(config_path)
