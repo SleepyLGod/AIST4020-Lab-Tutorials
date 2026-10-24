@@ -452,11 +452,13 @@ class NotebookTests(unittest.TestCase):
     def test_backend_selection_and_disabled_calls(self) -> None:
         source = next("".join(c["source"]) for c in self.notebook["cells"]
                       if c["cell_type"] == "code" and "BACKENDS = {" in "".join(c["source"]))
+        context = {}
+        with contextlib.redirect_stdout(io.StringIO()):
+            exec(source, context)
+        self.assertEqual(context["backend"], "ollama")
+        self.assertTrue(context["ENABLE_MODEL_CALLS"])
+        self.assertEqual(context["BACKENDS"]["nvidia"]["model"], "z-ai/glm-5.3-flash")
         for backend in ("deepseek", "nvidia", "ollama"):
-            context = {}
-            with contextlib.redirect_stdout(io.StringIO()):
-                exec(source.replace('backend = "deepseek"', f'backend = "{backend}"'), context)
-            self.assertFalse(context["ENABLE_MODEL_CALLS"])
             selected = select_backend(backend, context["BACKENDS"])
             self.assertEqual(selected["model"], context["BACKENDS"][backend]["model"])
             self.assertEqual(context["BACKENDS"]["nvidia"]["key_env"], "NVIDIA_NIM_API_KEY")
