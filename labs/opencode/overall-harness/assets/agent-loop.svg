@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1100" height="920" viewBox="0 0 1100 920" role="img" aria-labelledby="title desc">
   <title id="title">Overall Harness: The OpenCode Repair</title>
-  <desc id="desc">We prepare a task, project files, permission rules, and tests. OpenCode prepares model input, checks tool requests, runs allowed tools, and saves messages and results for later calls. Project files are accessed through tools, not all pasted into the input. After the run ends, we independently check the program, file changes, and report. A dashed arrow shows how those checks can guide changes to the setup for a future run.</desc>
+  <desc id="desc">We prepare a task, project files, permission rules, and tests. OpenCode prepares model input, checks tool requests, runs allowed tools, and saves messages and results for later calls. A final answer is also saved before the run ends. Project files are accessed through tools, not all pasted into the input. After the run ends, we independently check the program, file changes, and report. A dashed arrow shows how those checks can guide changes to the setup for a future run.</desc>
   <defs>
     <marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0 0 L8 4 L0 8 Z" fill="#52606d"/></marker>
     <style>
@@ -56,16 +56,18 @@
   <path class="line" d="M830 495 V595 H750"/>
   <text x="840" y="531" class="small">Output, error,</text>
   <text x="840" y="553" class="small">or denial</text>
+  <path class="line" d="M505 495 V550"/>
+  <text x="515" y="526" class="small">Final answer</text>
   <rect class="app" x="390" y="550" width="360" height="90" rx="5"/>
   <text x="570" y="585" text-anchor="middle" class="label">Save the conversation</text>
   <text x="570" y="616" text-anchor="middle" class="detail">Messages, requests, and results</text>
   <path class="line" d="M390 595 H192 V495"/>
   <text x="65" y="636" class="small">For the next model call,</text>
   <text x="65" y="660" class="small">if the run continues</text>
-  <text x="390" y="674" class="small">Also available when you continue the same session</text>
+  <text x="65" y="690" class="small">Saved history is available in later turns too</text>
 
-  <path class="line" d="M520 700 V755"/>
-  <text x="540" y="735" class="small">When the run ends</text>
+  <path class="line" d="M570 640 V755"/>
+  <text x="590" y="735" class="small">When the run ends</text>
 
   <rect x="40" y="755" width="960" height="145" rx="6" fill="#faf7ee" stroke="#a58a45" stroke-width="1.5"/>
   <text x="65" y="794" class="section">3. You check the result</text>
