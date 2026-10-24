@@ -167,9 +167,20 @@ class SupportTests(unittest.TestCase):
                 support.show_repair_comparison(initial, failed_test, final, failed_test, [], Redactor())
             rows = table.call_args.args[2]
             self.assertEqual(rows[0][2], expected)
-            self.assertEqual(rows[1][2], "Exit 1")
+            self.assertEqual(rows[1][2], "Failed")
             self.assertEqual(rows[2][2], "No changes")
             self.assertNotIn("90", repr(rows))
+
+    def test_repair_comparison_distinguishes_test_outcomes(self) -> None:
+        average = RunResult(0, False, .1, "Average: 60.0\n", "")
+        failed = RunResult(1, False, .1, "", "FAILED")
+        for code, timed_out, expected in ((0, False, "Passed"), (1, False, "Failed"),
+                                          (-15, True, "Timed out"), (0, True, "Timed out")):
+            with self.subTest(code=code, timed_out=timed_out):
+                result = RunResult(code, timed_out, .1, "", "")
+                with patch("lab_support.show_table") as table:
+                    support.show_repair_comparison(average, failed, average, result, [], Redactor())
+                self.assertEqual(table.call_args.args[2][1], ["Test result", "Failed", expected])
 
     def test_session_comparison_separates_reply_from_saved_instruction(self) -> None:
         reply = RunResult(0, False, .1, "", "", [{"type": "text", "sessionID": "test-session",

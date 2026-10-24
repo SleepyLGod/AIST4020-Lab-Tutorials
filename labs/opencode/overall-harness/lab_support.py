@@ -700,15 +700,18 @@ def show_repair_comparison(initial_average: RunResult, initial_test: RunResult,
                            final_average: RunResult, final_test: RunResult,
                            changed_files: Sequence[str], redact: Redactor) -> None:
     """Compare the student's actual checks, not the agent's claimed outcome."""
-    def outcome(result: RunResult) -> str:
-        return "Timed out" if result.timed_out else f"Exit {result.returncode}"
+    def test_outcome(result: RunResult) -> str:
+        if result.timed_out:
+            return "Timed out"
+        return "Passed" if result.returncode == 0 else "Failed"
 
     def average_output(result: RunResult) -> str:
-        return f"{result.stdout.strip() or 'No output reported'}\n({outcome(result)})"
+        status = "Timed out" if result.timed_out else f"Exit {result.returncode}"
+        return f"{result.stdout.strip() or 'No output reported'}\n({status})"
 
     show_table("Your checks before and after the repair", ["Check", "Before", "After"], [
         ["Program output", average_output(initial_average), average_output(final_average)],
-        ["Test command (0 = passed)", outcome(initial_test), outcome(final_test)],
+        ["Test result", test_outcome(initial_test), test_outcome(final_test)],
         ["Files changed since the first snapshot", "Starting snapshot",
          "\n".join(changed_files) or "No changes"],
     ], redact=redact)
