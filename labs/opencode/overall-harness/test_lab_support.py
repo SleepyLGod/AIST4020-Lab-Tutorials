@@ -16,7 +16,7 @@ import sys
 import tempfile
 import unittest
 import zipfile
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from lab_support import (
     Redactor, RunResult, credential, event_summary, fresh_project, isolated_environment,
@@ -178,6 +178,7 @@ class SupportTests(unittest.TestCase):
                                           (-15, True, "Timed out"), (0, True, "Timed out")):
             with self.subTest(code=code, timed_out=timed_out):
                 result = RunResult(code, timed_out, .1, "", "")
+                self.assertEqual(support.test_outcome(result), expected)
                 with patch("lab_support.show_table") as table:
                     support.show_repair_comparison(average, failed, average, result, [], Redactor())
                 self.assertEqual(table.call_args.args[2][1], ["Test result", "Failed", expected])
@@ -440,6 +441,21 @@ class NotebookTests(unittest.TestCase):
         self.assertEqual(context["test_after"].returncode, 0)
         self.assertEqual(context["average_check"].returncode, 0)
         self.assertEqual(context["average_check"].stdout.strip(), "Average: 90.0")
+
+    def test_download_without_session_comparison(self) -> None:
+        cell = next(c for c in self.notebook["cells"] if c["id"] == "download")
+        source = "".join(cell["source"]).replace("DOWNLOAD_RECORDS = False", "DOWNLOAD_RECORDS = True", 1)
+        lab = Mock()
+        # Synthetic failed run: no same/fresh conversation was created.
+        result = RunResult(1, False, .1, "", "")
+        context = {"lab": lab, "repair": result, "changed_files": [],
+                   "test_after": result, "average_check": result}
+        exec(compile(source, "download", "exec"), context)
+        lab.save_record.assert_called_once_with({
+            "repair_session": None, "changed_files": [],
+            "your_test_passed": False, "average_is_90": False,
+        })
+        lab.download_records.assert_called_once_with()
 
     def test_config_cell_has_no_credentials_or_provider_fallback(self) -> None:
         cell = next(c for c in self.notebook["cells"] if "PERMISSIONS = {" in "".join(c["source"]))

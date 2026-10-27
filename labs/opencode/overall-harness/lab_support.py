@@ -696,15 +696,17 @@ def show_tool_actions(result: RunResult) -> None:
             show_details("OpenCode error", json.dumps(event, indent=2), opened=True)
 
 
+def test_outcome(result: RunResult) -> str:
+    """Label an independent test result, not a tool event or overall agent task."""
+    if result.timed_out:
+        return "Timed out"
+    return "Passed" if result.returncode == 0 else "Failed"
+
+
 def show_repair_comparison(initial_average: RunResult, initial_test: RunResult,
                            final_average: RunResult, final_test: RunResult,
                            changed_files: Sequence[str], redact: Redactor) -> None:
     """Compare the student's actual checks, not the agent's claimed outcome."""
-    def test_outcome(result: RunResult) -> str:
-        if result.timed_out:
-            return "Timed out"
-        return "Passed" if result.returncode == 0 else "Failed"
-
     def average_output(result: RunResult) -> str:
         status = "Timed out" if result.timed_out else f"Exit {result.returncode}"
         return f"{result.stdout.strip() or 'No output reported'}\n({status})"
