@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="350" viewBox="0 0 1000 350" role="img" aria-labelledby="title desc">
+  <title id="title">An edit request passes through a permission check</title>
+  <desc id="desc">The model requests an edit to grades.py. OpenCode checks the file rule. Allow leads to a file write and a result. Deny leads to an error without that edit. Either result returns to the model.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0 0 L8 4 L0 8 Z" fill="#475569"/></marker>
+  </defs>
+  <rect width="1000" height="350" fill="white"/>
+  <g fill="none" stroke="#475569" stroke-width="2" marker-end="url(#arrow)">
+    <path d="M238 170 H298"/>
+    <path d="M515 150 H552 V94 H595"/>
+    <path d="M515 190 H552 V244 H595"/>
+    <path d="M815 94 H852 V146 H882"/>
+    <path d="M815 244 H852 V194 H882"/>
+  </g>
+  <g font-family="Arial, sans-serif" text-anchor="middle" font-size="18" fill="#18212b">
+    <rect x="28" y="125" width="210" height="90" rx="6" fill="#eef5fb" stroke="#557fa0"/>
+    <text x="133" y="160">Model requests</text><text x="133" y="187" font-family="monospace">edit grades.py</text>
+    <rect x="298" y="125" width="217" height="90" rx="6" fill="#f2f3f5" stroke="#667085"/>
+    <text x="406" y="160">OpenCode checks</text><text x="406" y="187">the file rule</text>
+    <rect x="595" y="50" width="220" height="88" rx="6" fill="#edf7f0" stroke="#41805a"/>
+    <text x="705" y="84">Write the file</text><text x="705" y="111">Return the result</text>
+    <rect x="595" y="200" width="220" height="88" rx="6" fill="#fff1ef" stroke="#b3544b"/>
+    <text x="705" y="234">Do not make this edit</text><text x="705" y="261">Return an error</text>
+    <text x="557" y="70" fill="#28653e">allow</text>
+    <text x="557" y="274" fill="#a33d35">deny</text>
+    <rect x="882" y="125" width="90" height="90" rx="6" fill="#eef5fb" stroke="#557fa0"/>
+    <text x="927" y="160">Back to</text><text x="927" y="187">model</text>
+    <text x="500" y="328" font-size="15" fill="#475569">How the edit tool works. The action records show what happened in your run.</text>
+  </g>
+</svg>
