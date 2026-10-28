@@ -125,7 +125,7 @@ class ArtifactTests(unittest.TestCase):
             self.assertNotIn(removed, code)
         self.assertNotIn('RUN_COMPLETE_QUERY', code)
         self.assertIn('results = query.collect()', CELLS['textbook-18'])
-        self.assertIn('removes this field', CELLS['textbook-09'])
+        self.assertIn('removes the `keep` field from the returned records', CELLS['textbook-09'])
 
     def test_reading_order_and_single_rewritten_query(self) -> None:
         ids = [cell['id'] for cell in NOTEBOOK['cells']]
@@ -189,6 +189,11 @@ class ArtifactTests(unittest.TestCase):
         expected[0]['prompt'] = expected[0]['prompt'].replace(
             'return None for the topic.', 'return the string Excluded for the topic.'
         ).replace('(Food, Service, or None).', '(Food, Service, or Excluded).')
+        # The lesson uses the default temperature and requires the keep field.
+        expected[0]['litellm_completion_kwargs'].pop('temperature')
+        expected[1]['code'] = expected[1]['code'].replace(
+            "input_doc.get('keep', False)", "input_doc['keep']"
+        )
         query = assigned_query('textbook-26', 'optimized_query', definitions_)
         actual = yaml.safe_load(query.to_yaml())['operations']
         self.assertEqual([{k: v for k, v in op.items() if k != 'name'} for op in actual], expected)
@@ -264,6 +269,15 @@ class NativeQueryTests(unittest.TestCase):
         self.assertEqual(len(self.ns['fused_reviews']), 6)
         self.assertEqual({r['review_id'] for r in selected_reviews}, {'R2', 'R4', 'R5'})
         self.assertTrue(all(r['keep'] is True for r in selected_reviews))
+
+    def test_code_filter_requires_an_explicit_keep_decision(self) -> None:
+        namespace = {}
+        exec(self.ns['code_filter']['code'], namespace)
+        transform = namespace['transform']
+        self.assertIs(transform({'keep': True}), True)
+        self.assertIs(transform({'keep': False}), False)
+        with self.assertRaises(KeyError):
+            transform({'review_id': 'R1'})
 
     def test_walkthrough_and_comparison_use_identical_fusion_operations(self) -> None:
         expression = next(node.value for node in ast.parse(CELLS['textbook-25']).body
