@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-import contextlib
 from dataclasses import dataclass, field
 import importlib.util
-import io
 import json
 from pathlib import Path
 import shlex
@@ -36,7 +34,6 @@ Snapshot = dict[str, dict[str, str]]
 _GENERATED_IGNORE = "node_modules\npackage.json\npackage-lock.json\nbun.lock\n.gitignore"
 _DETAIL_FIELDS = {"Session", "OpenCode setup file"}
 _RUN_TIMEOUT_SECONDS = 300
-_AGENT_STEPS = 12
 
 
 def _target(part: dict, project: Path, filename: str) -> bool:
@@ -93,16 +90,15 @@ class Case:
     after: Snapshot | None = None
     _started: bool = False
 
-    def run(self, prompt: str) -> RunResult:
+    def run(self, command: Sequence[str]) -> RunResult:
         """Run a fresh session once; do not retry or complete missing agent actions."""
         if self._started:
             raise RuntimeError("Create a new case before rerunning this task; this project has already been used.")
+        if isinstance(command, str) or not command:
+            raise ValueError("Provide the complete command as a list of arguments.")
         self._started = True
-        command = [str(self.binary), "run", "--pure", "--format", "json",
-                   "--agent", "build", "--model", self.model, prompt]
         print(self.redact(f"Working directory: {self.project}\n$ {shlex.join(command)}"), flush=True)
-        print(f"The helper stops after {_RUN_TIMEOUT_SECONDS // 60} minutes; "
-              f"OpenCode asks the model to finish from loop round {_AGENT_STEPS}.", flush=True)
+        print(f"The helper stops after {_RUN_TIMEOUT_SECONDS // 60} minutes.", flush=True)
 
         def progress(event: dict) -> None:
             if event.get("type") == "tool_use":
@@ -123,7 +119,7 @@ class Case:
                                        event_log=self.records / "agent.jsonl")
         self.after = base.snapshot(self.project)
         base.save_json(self.records / "files.json", {"before": self.before, "after": self.after}, self.redact)
-        base.save_json(self.records / "task.json", {"prompt": prompt, "session_id": self.result.session_id}, self.redact)
+        base.save_json(self.records / "task.json", {"command": list(command), "session_id": self.result.session_id}, self.redact)
         if self.result.stderr:
             show_details("CLI messages", self.redact(self.result.stderr), opened=self.result.returncode != 0)
         print(f"Exit {self.result.returncode}; timed out: {self.result.timed_out}; {self.result.seconds}s")
@@ -166,7 +162,7 @@ class Experiment:
         )
         self.selected, self.redact, self.backend = selected, redact, backend
 
-    def new_case(self, name: str, permissions: dict, *, with_skill: bool = False) -> Case:
+    def new_case(self, name: str, settings: dict, *, with_skill: bool = False) -> Case:
         """Copy unchanged starting files and apply exactly the supplied permissions."""
         if not self.selected:
             raise RuntimeError("Choose and configure a model before creating a case.")
@@ -178,18 +174,16 @@ class Experiment:
             shutil.copy2(self.lab_dir / "skills" / "repair-check" / "SKILL.md", target)
         env = base.isolated_environment(root)
         env["COURSE_API_KEY"] = self.env["COURSE_API_KEY"]
-        # The notebook already shows these permissions. Avoid printing the same JSON again.
-        with contextlib.redirect_stdout(io.StringIO()):
-            model, _ = base.write_configuration(
-                root, env, self.selected, provider=self.backend, permissions=permissions,
-                context_tokens=16384 if self.backend == "ollama" else 32768,
-                output_tokens=2048, steps=_AGENT_STEPS, redact=self.redact,
-            )
+        model, _ = base.write_configuration(
+            root, env, self.selected, provider=self.backend, settings=settings,
+            context_tokens=16384 if self.backend == "ollama" else 32768,
+            output_tokens=2048, redact=self.redact,
+        )
         records = root / "records"
         records.mkdir()
         before = base.snapshot(project)
         base.save_json(records / "setup.json", {"name": name, "version": self.version,
-            "model": model, "permissions": permissions, "with_skill": with_skill}, self.redact)
+            "model": model, "permissions": settings["permission"], "with_skill": with_skill}, self.redact)
         case = Case(name, root, project, self.binary, env, model, records, self.redact, before)
         self.cases.append(case)
         print(f"{name}: fresh project at {project}; the next request starts a new session.")

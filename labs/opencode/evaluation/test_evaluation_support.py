@@ -9,6 +9,7 @@ import hashlib
 import io
 import json
 import os
+import re
 from pathlib import Path
 import sys
 import tempfile
@@ -24,6 +25,18 @@ class EvaluationTests(unittest.TestCase):
     def setUp(self) -> None:
         self.lab = support.open_lab()
         self.output = io.StringIO()
+        notebook = json.loads((HERE / 'opencode_evaluation.ipynb').read_text())
+        source = next(''.join(c['source']) for c in notebook['cells'] if c['id'] == 'delivery-check')
+        # Execute the student's actual rule, without running notebook setup or checks.
+        nodes = [node for node in ast.parse(source).body
+                 if isinstance(node, ast.FunctionDef) and node.name == 'report_gaps'
+                 or isinstance(node, ast.Assign) and any(
+                     isinstance(target, ast.Name) and target.id == 'REQUIRED_SECTIONS'
+                     for target in node.targets)]
+        namespace = {'support': support, 're': re}
+        exec(compile(ast.Module(body=nodes, type_ignores=[]), 'notebook-report-rule', 'exec'), namespace)
+        self.report_gaps = namespace['report_gaps']
+        self.required_sections = namespace['REQUIRED_SECTIONS']
 
     def case(self, name: str = 'incomplete') -> support.Delivery:
         with contextlib.redirect_stdout(self.output):
@@ -55,19 +68,25 @@ class EvaluationTests(unittest.TestCase):
                                                 'No saved reply available.', opened=True)
 
     def test_real_incomplete_and_complete_reports(self) -> None:
-        self.assertEqual(support.report_gaps(self.case().read('review.md')), list(support.REQUIRED_SECTIONS))
-        self.assertEqual(support.report_gaps(self.case('complete').read('review.md')), [])
-        self.assertEqual(support.report_gaps(self.case('remediated').read('review.md')), [])
+        self.assertEqual(self.report_gaps(self.case().read('review.md')), list(self.required_sections))
+        self.assertEqual(self.report_gaps(self.case('complete').read('review.md')), [])
+        self.assertEqual(self.report_gaps(self.case('remediated').read('review.md')), [])
+
+    def test_student_controls_required_sections_in_the_notebook(self) -> None:
+        self.report_gaps.__globals__['REQUIRED_SECTIONS'] = ('Evidence',)
+        self.assertEqual(self.report_gaps('## Changes\nChanged the report.'), ['Evidence'])
+        self.assertEqual(self.report_gaps('## Evidence\nRecorded test output.'), [])
+        self.assertEqual(self.report_gaps('## Evidence\n  \n-'), ['Evidence'])
 
     def test_report_parser_handles_case_and_code_fences(self) -> None:
         text = '```md\n## Test results\nFabricated heading inside code\n```\n'
-        self.assertEqual(support.report_gaps(text), list(support.REQUIRED_SECTIONS))
+        self.assertEqual(self.report_gaps(text), list(self.required_sections))
         text = '### TEST RESULTS\nPassed.\n## Changes\n-\n## Unresolved issues\nNone.\n'
-        self.assertEqual(support.report_gaps(text), ['Changes'])
+        self.assertEqual(self.report_gaps(text), ['Changes'])
 
     def test_nonempty_prose_is_not_automatically_verified(self) -> None:
         text = '## Test results\nI ran a million tests.\n## Changes\nEverything.\n## Unresolved issues\nNone.\n'
-        self.assertEqual(support.report_gaps(text), [])
+        self.assertEqual(self.report_gaps(text), [])
         with contextlib.redirect_stdout(self.output):
             support.show_checks('Synthetic content', {'test_status': 'Unknown', 'report_gaps': [],
                 'changed_files': [], 'unexpected_changes': [], 'comparison_start': 'Synthetic starting files'})
@@ -78,7 +97,7 @@ class EvaluationTests(unittest.TestCase):
                 'Ran python3 -m unittest -v: one test passed.\n'
                 '#### Details\nNo failures.\n'
                 '## Changes\nCompleted review.md only.\n## Unresolved issues\nNone.\n')
-        self.assertEqual(support.report_gaps(text), [])
+        self.assertEqual(self.report_gaps(text), [])
         sections = support.report_sections(text)
         self.assertIn('one test passed', sections['test results'])
         self.assertIn('No failures.', sections['test results'])
@@ -87,12 +106,12 @@ class EvaluationTests(unittest.TestCase):
     def test_empty_subheadings_do_not_count_as_report_content(self) -> None:
         text = ('## Test results\n### Command\n### Result\n'
                 '## Changes\nCompleted review.md only.\n## Unresolved issues\nNone.\n')
-        self.assertEqual(support.report_gaps(text), ['Test results'])
+        self.assertEqual(self.report_gaps(text), ['Test results'])
 
     def test_nested_code_fences_do_not_start_new_sections(self) -> None:
         text = ('## Test results\n### Output\n\x60\x60\x60text\n'
                 '## Changes\nOne test passed.\n\x60\x60\x60\n## Unresolved issues\nNone.\n')
-        self.assertEqual(support.report_gaps(text), ['Changes'])
+        self.assertEqual(self.report_gaps(text), ['Changes'])
         self.assertIn('## Changes', support.report_sections(text)['test results'])
 
     def test_historical_analysis_never_installs_or_reads_a_key(self) -> None:
@@ -130,7 +149,7 @@ class EvaluationTests(unittest.TestCase):
     def test_disabled_setup_cannot_contact_provider(self) -> None:
         with patch.object(support.base, 'configure_backend') as configure:
             with self.assertRaises(RuntimeError):
-                self.lab.prepare_live(self.case(), 'deepseek', {}, permissions={}, steps=12, enabled=False)
+                self.lab.prepare_live(self.case(), 'deepseek', {}, settings={}, enabled=False)
         configure.assert_not_called()
 
     def test_live_setup_preserves_starting_bytes_and_permissions(self) -> None:
@@ -142,7 +161,8 @@ class EvaluationTests(unittest.TestCase):
              patch.object(support.base, 'install_opencode', return_value=Path('/not-executed/opencode')), \
              contextlib.redirect_stdout(self.output):
             live, binary, model = self.lab.prepare_live(failed, 'deepseek', {},
-                permissions=failed.record['permissions'], steps=12, enabled=True)
+                settings={'permission': {'*': 'deny'},
+                          'agent': {'build': {'permission': failed.record['permissions'], 'steps': 12}}}, enabled=True)
         self.assertEqual(support.base.snapshot(live.project), failed.record['files']['after'])
         text = Path(live.env['OPENCODE_CONFIG']).read_text()
         config = json.loads(text)
@@ -259,10 +279,10 @@ class EvaluationTests(unittest.TestCase):
             configure.assert_not_called()
         finally:
             os.chdir(old_cwd)
-        self.assertTrue(state['failed_checks']['test_passed'])
-        for name in ('failed_checks', 'complete_checks', 'saved_checks'):
+        self.assertTrue(state['incomplete_checks']['test_passed'])
+        for name in ('incomplete_checks', 'complete_checks', 'saved_checks'):
             self.assertEqual(state[name]['test_status'], 'Passed')
-        self.assertEqual(state['failed_checks']['report_gaps'], list(support.REQUIRED_SECTIONS))
+        self.assertEqual(state['incomplete_checks']['report_gaps'], list(self.required_sections))
         self.assertEqual(state['complete_checks']['report_gaps'], [])
         self.assertEqual(state['saved_checks']['report_gaps'], [])
         self.assertEqual(state['saved_checks']['unexpected_changes'], [])

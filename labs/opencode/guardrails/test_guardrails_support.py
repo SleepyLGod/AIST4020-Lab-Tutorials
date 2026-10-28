@@ -50,7 +50,8 @@ class GuardrailsTests(unittest.TestCase):
 
     def case(self, name: str = "Synthetic case", **kwargs: object) -> support.Case:
         with contextlib.redirect_stdout(io.StringIO()):
-            return self.lab.new_case(name, copy.deepcopy(PERMISSIONS), **kwargs)
+            return self.lab.new_case(name, {"permission": copy.deepcopy(PERMISSIONS),
+                                           "agent": {"build": {"steps": 12}}}, **kwargs)
 
     def set_result(self, case: support.Case, events: list[dict]) -> support.RunResult:
         case.result = support.RunResult(0, False, 0.1, "", "", events)
@@ -99,13 +100,16 @@ class GuardrailsTests(unittest.TestCase):
     def test_run_uses_real_cli_command_and_does_not_retry(self) -> None:
         case = self.case()
         failed = support.RunResult(-15, True, 300, "", "Synthetic timeout", [])
+        command = [str(case.binary), "run", "--pure", "--format", "json",
+                   "--agent", "build", "--model", case.model, "Synthetic task"]
         with patch.object(support.base, "run_command", return_value=failed) as run, \
                 patch.object(support, "show_details"), contextlib.redirect_stdout(io.StringIO()) as output:
-            self.assertIs(case.run("Synthetic task"), failed)
+            self.assertIs(case.run(command), failed)
             with self.assertRaisesRegex(RuntimeError, "Create a new case"):
-                case.run("Synthetic task")
+                case.run(command)
         run.assert_called_once()
         args = run.call_args.args[0]
+        self.assertEqual(args, command)
         self.assertIn("run", args)
         self.assertIn("--pure", args)
         self.assertEqual(args[-1], "Synthetic task")
@@ -113,7 +117,6 @@ class GuardrailsTests(unittest.TestCase):
         self.assertEqual(run.call_args.kwargs["timeout"], 300)
         self.assertEqual(run.call_args.kwargs["cwd"], case.project)
         self.assertIn("helper stops after 5 minutes", output.getvalue())
-        self.assertIn("asks the model to finish from loop round 12", output.getvalue())
 
     def test_independent_check_omits_credentials_and_keeps_failure(self) -> None:
         case = self.case()

@@ -174,15 +174,18 @@ def configure_backend(backend: str, backends: Mapping[str, Mapping[str, str]], *
 
 
 def write_configuration(root: Path, env: dict[str, str], selected: Mapping[str, str], *,
-                        provider: str, permissions: dict, context_tokens: int,
-                        output_tokens: int, steps: int, redact: Redactor) -> tuple[str, dict[str, str]]:
-    """Save repair and no-tools configurations with an environment key reference."""
+                        provider: str, settings: dict, context_tokens: int,
+                        output_tokens: int, redact: Redactor,
+                        chat_settings: dict | None = None) -> tuple[str, dict[str, str]]:
+    """Save visible OpenCode settings alongside the prepared model connection."""
+    for value in (settings, chat_settings):
+        if value is not None and set(value) != {"permission", "agent"}:
+            raise ValueError("Provide OpenCode permission and agent settings.")
     model_ref = f"course/{selected['model']}"
     request_timeout_ms = 180000 if provider == "ollama" else 60000
     config = {
         "$schema": "https://opencode.ai/config.json", "model": model_ref, "small_model": model_ref,
         "enabled_providers": ["course"], "share": "disabled", "snapshot": False, "autoupdate": False,
-        "permission": permissions, "agent": {"build": {"steps": steps}},
         "provider": {"course": {
             "npm": "@ai-sdk/openai-compatible", "name": provider,
             "options": {"baseURL": selected["base_url"], "apiKey": "{env:COURSE_API_KEY}", "timeout": request_timeout_ms},
@@ -192,16 +195,19 @@ def write_configuration(root: Path, env: dict[str, str], selected: Mapping[str, 
     }
     if provider == "ollama":
         config["provider"]["course"]["models"][selected["model"]]["options"] = {"reasoningEffort": "none"}
+    config.update(copy.deepcopy(settings))
     config_path = root / "opencode.json"
     save_json(config_path, config, redact)
     env["OPENCODE_CONFIG"] = str(config_path)
-    chat = copy.deepcopy(config)
-    chat["permission"] = {"*": "deny"}
-    chat["agent"]["build"]["permission"] = {"*": "deny"}
-    chat_path = root / "opencode-no-tools.json"
-    save_json(chat_path, chat, redact)
-    print("Repair permissions:", json.dumps(permissions, indent=2))
-    return model_ref, {**env, "OPENCODE_CONFIG": str(chat_path)}
+    print(redact(f"Model connection: course\nService: {selected['base_url']}\nModel: {model_ref}\nConfiguration: {config_path}"))
+    chat_env = {}
+    if chat_settings is not None:
+        chat = copy.deepcopy(config)
+        chat.update(copy.deepcopy(chat_settings))
+        chat_path = root / "opencode-no-tools.json"
+        save_json(chat_path, chat, redact)
+        chat_env = {**env, "OPENCODE_CONFIG": str(chat_path)}
+    return model_ref, chat_env
 
 
 def package_records(records: Path, redact: Redactor) -> Path:
@@ -552,7 +558,7 @@ class Lab:
     enabled: bool = False
 
     def configure(self, backend: str, backends: Mapping[str, Mapping[str, str]], *,
-                  permissions: dict, enabled: bool) -> None:
+                  settings: dict, chat_settings: dict, enabled: bool) -> None:
         """Configure only the selected provider, using the course's existing limits."""
         self.enabled = False
         context_tokens = 16384 if backend == "ollama" else 32768
@@ -561,29 +567,29 @@ class Lab:
             context_tokens=context_tokens, enabled=enabled,
         )
         self.model, self.chat_env = write_configuration(
-            self.root, self.env, selected, provider=backend, permissions=permissions,
-            context_tokens=context_tokens, output_tokens=2048, steps=12, redact=self.redact,
+            self.root, self.env, selected, provider=backend, settings=settings,
+            context_tokens=context_tokens, output_tokens=2048, redact=self.redact,
+            chat_settings=chat_settings,
         )
         self.enabled = enabled
         self.save_record({"opencode_version": self.version, "provider": backend,
-                          "model": selected["model"], "permissions": permissions})
+                          "model": selected["model"], "permissions": settings["permission"]})
         print(f"Model: {self.model}")
 
-    def run(self, prompt: str, *, session_id: str | None = None,
+    def run(self, command: Sequence[str], *,
             tools: bool = True, label: str = "repair") -> RunResult:
         """Run one visible CLI command, without retrying or completing missing actions."""
         if not self.enabled:
             raise RuntimeError("Model calls are disabled. Configure the selected provider first.")
         if label not in {"hello", "repair", "same", "fresh"}:
             raise ValueError("Choose a known lab record label.")
-        args = [str(self.binary), "run", "--pure", "--format", "json",
-                "--agent", "build", "--model", self.model]
-        if session_id is not None:
-            if not session_id.strip():
-                raise ValueError("A continued conversation needs a nonempty session ID.")
-            args += ["--session", session_id]
+        if isinstance(command, str) or not command:
+            raise ValueError("Provide the complete command as a list of arguments.")
+        run_env = self.env if tools else self.chat_env
+        if run_env.get("OPENCODE_CONFIG"):
+            print(self.redact(f"Configuration: {run_env['OPENCODE_CONFIG']}"))
         result = run_command(
-            [*args, prompt], cwd=self.project, env=self.env if tools else self.chat_env,
+            command, cwd=self.project, env=run_env,
             timeout=300, redact=self.redact,
             event_log=self.records / f"{label}-{uuid.uuid4().hex}.jsonl",
         )
@@ -601,11 +607,11 @@ class Lab:
         env = {k: v for k, v in self.env.items() if k not in {"COURSE_API_KEY", "OPENCODE_CONFIG"}}
         return run_command(command, cwd=self.project, env=env, timeout=20, redact=self.redact)
 
-    def export(self, session_id: str, *, label: str, show: bool = True) -> dict:
+    def export(self, command: Sequence[str], *, label: str, show: bool = True) -> dict:
         """Export and display saved messages; do not infer what the model received."""
-        if not session_id or label not in {"continued", "fresh"}:
-            raise ValueError("Provide a session ID and a continued/fresh label.")
-        command = [str(self.binary), "export", session_id]
+        if (isinstance(command, str) or len(command) != 3 or command[1] != "export"
+                or not command[2] or label not in {"continued", "fresh"}):
+            raise ValueError("Provide an export command with a session ID and a continued/fresh label.")
         print(self.redact(f"Working directory: {self.project}\n$ {shlex.join(command)}"))
         result = run_command(command, cwd=self.project,
                              env=self.chat_env, redact=self.redact, timeout=60, show=False)
@@ -748,7 +754,8 @@ def show_tool_event(event: dict, *, title: str = "Tool request and result", open
     """Display task-relevant output first, retaining the complete event for inspection."""
     part = event.get("part") or {}
     state = part.get("state") or {}
-    lines = ["Requested:", json.dumps(state.get("input", {}), indent=2, ensure_ascii=False)]
+    lines = [f"Status: {state.get('status', 'Not reported')}",
+             "Requested:", json.dumps(state.get("input", {}), indent=2, ensure_ascii=False)]
     for key in ("output", "error"):
         if key in state:
             value = state[key]

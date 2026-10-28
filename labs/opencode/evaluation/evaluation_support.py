@@ -2,12 +2,10 @@
 
 from __future__ import annotations
 
-import contextlib
 from dataclasses import dataclass, field
 import difflib
 import hashlib
 import importlib.util
-import io
 import json
 from pathlib import Path
 import re
@@ -33,7 +31,6 @@ if Path(base.__file__).resolve() != SHARED.resolve():
     raise ImportError('Restart the kernel to use this course checkout.')
 
 Snapshot = dict[str, dict[str, str]]
-REQUIRED_SECTIONS = ('Test results', 'Changes', 'Unresolved issues')
 
 
 def report_sections(text: str) -> dict[str, str]:
@@ -63,13 +60,6 @@ def report_sections(text: str) -> dict[str, str]:
             for _, name in parents:
                 sections[name].append(line)
     return {name: '\n'.join(body).strip() for name, body in sections.items()}
-
-
-def report_gaps(text: str) -> list[str]:
-    """Check existing project headings and content, not the truth of the content."""
-    sections = report_sections(text)
-    return [name for name in REQUIRED_SECTIONS
-            if not re.search(r'[A-Za-z0-9]', sections.get(name.casefold(), ''))]
 
 
 def changed_files(before: Snapshot, after: Snapshot) -> list[str]:
@@ -170,7 +160,7 @@ class Lab:
         return delivery
 
     def prepare_live(self, failed: Delivery, backend: str, backends: Mapping[str, Mapping[str, str]], *,
-                     permissions: dict, steps: int, enabled: bool) -> tuple[Delivery, Path, str]:
+                     settings: dict, enabled: bool) -> tuple[Delivery, Path, str]:
         """Install/configure the chosen provider, restoring the untouched historical after-state."""
         if not enabled:
             raise RuntimeError('Live calls are disabled.')
@@ -187,14 +177,10 @@ class Lab:
         records.mkdir()
         starting = failed.record['files']['after']
         _restore(starting, project)
-        with contextlib.redirect_stdout(io.StringIO()):
-            model, _ = base.write_configuration(root, env, selected, provider=backend,
-                permissions={'*': 'deny'}, context_tokens=16384 if backend == 'ollama' else 32768,
-                output_tokens=2048, steps=steps, redact=redact)
+        model, _ = base.write_configuration(root, env, selected, provider=backend,
+            settings=settings, context_tokens=16384 if backend == 'ollama' else 32768,
+            output_tokens=2048, redact=redact)
         path = Path(env['OPENCODE_CONFIG'])
-        config = json.loads(path.read_text())
-        config['agent']['build']['permission'] = permissions
-        base.save_json(path, config, redact)
         record = {'model': model, 'seconds': None, 'version': self.version,
                   'original_model': failed.record['model']}
         delivery = Delivery('Your live follow-up', project, starting, env, records, record, None,

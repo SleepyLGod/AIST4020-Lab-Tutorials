@@ -2,11 +2,8 @@
 
 from __future__ import annotations
 
-import contextlib
-import copy
 from dataclasses import dataclass, field
 import importlib.util
-import io
 import json
 from pathlib import Path
 import shlex
@@ -108,13 +105,13 @@ class Case:
     session_errors: dict[str, str] = field(default_factory=dict)
     _started: bool = False
 
-    def run(self, prompt: str) -> RunResult:
+    def run(self, command: Sequence[str]) -> RunResult:
         """Invoke the main agent once; do not invoke an investigator agent from Python."""
         if self._started:
             raise RuntimeError("Create a new case before rerunning; this project has already been used.")
+        if isinstance(command, str) or not command:
+            raise ValueError("Provide the complete command as a list of arguments.")
         self._started = True
-        command = [str(self.binary), "run", "--pure", "--format", "json",
-                   "--agent", "build", "--model", self.model, prompt]
         print(self.redact(f"Working directory: {self.project}\n$ {shlex.join(command)}"), flush=True)
 
         def progress(event: dict) -> None:
@@ -131,7 +128,7 @@ class Case:
             redact=self.redact, show=False, on_event=progress, event_log=self.records / "agent.jsonl")
         self.after = base.snapshot(self.project)
         base.save_json(self.records / "files.json", {"before": self.before, "after": self.after}, self.redact)
-        base.save_json(self.records / "task.json", {"prompt": prompt, "model": self.model}, self.redact)
+        base.save_json(self.records / "task.json", {"command": list(command), "model": self.model}, self.redact)
         if self.result.stderr:
             base.show_details("CLI messages", self.redact(self.result.stderr), opened=self.result.returncode != 0)
         print(f"Exit {self.result.returncode}; timed out: {self.result.timed_out}; {self.result.seconds}s")
@@ -253,7 +250,7 @@ class Experiment:
         self.selected, self.redact, self.backend = selected, redact, backend
         self.model = f"course/{selected['model']}"
 
-    def new_case(self, name: str, agents: dict) -> Case:
+    def new_case(self, name: str, settings: dict) -> Case:
         """Save the visible role definitions and copy the untouched four-file example."""
         if not self.selected:
             raise RuntimeError("Choose and configure a provider before creating a case.")
@@ -261,19 +258,15 @@ class Experiment:
         project = base.fresh_project(_CHAPTER1 / "grade-report", root)
         env = base.isolated_environment(root)
         env["COURSE_API_KEY"] = self.env["COURSE_API_KEY"]
-        with contextlib.redirect_stdout(io.StringIO()):
-            model, _ = base.write_configuration(root, env, self.selected, provider=self.backend,
-                permissions={"*": "deny"}, context_tokens=16384 if self.backend == "ollama" else 32768,
-                output_tokens=2048, steps=agents["build"]["steps"], redact=self.redact)
+        model, _ = base.write_configuration(root, env, self.selected, provider=self.backend,
+            settings=settings, context_tokens=16384 if self.backend == "ollama" else 32768,
+            output_tokens=2048, redact=self.redact)
         config_path = Path(env["OPENCODE_CONFIG"])
-        config = json.loads(config_path.read_text())
-        config["agent"] = copy.deepcopy(agents)
-        base.save_json(config_path, config, self.redact)
         records = root / "records"
         records.mkdir()
         before = base.snapshot(project)
         base.save_json(records / "setup.json", {"name": name, "version": self.version,
-            "model": model, "agents": agents}, self.redact)
+            "model": model, "agents": settings["agent"]}, self.redact)
         case = Case(name, root, project, self.binary, env, model, records, self.redact, before)
         self.cases.append(case)
         print(f"{name}: {project}\nConfiguration: {config_path}")

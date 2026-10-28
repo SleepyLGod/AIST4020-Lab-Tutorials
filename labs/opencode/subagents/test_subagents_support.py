@@ -53,7 +53,7 @@ class SubagentsTests(unittest.TestCase):
 
     def case(self, name: str = 'Synthetic case') -> support.Case:
         with contextlib.redirect_stdout(io.StringIO()):
-            return self.lab.new_case(name, copy.deepcopy(AGENTS))
+            return self.lab.new_case(name, {"permission": {"*": "deny"}, "agent": copy.deepcopy(AGENTS)})
 
     def completed(self, case: support.Case, parent: dict) -> None:
         case.parent = parent
@@ -95,11 +95,13 @@ class SubagentsTests(unittest.TestCase):
     def test_run_only_calls_main_agent_once_and_keeps_timeout(self) -> None:
         case = self.case()
         result = support.RunResult(-15, True, 300, '', 'Synthetic timeout')
+        command = [str(case.binary), 'run', '--pure', '--format', 'json',
+                   '--agent', 'build', '--model', case.model, 'Synthetic user request']
         with patch.object(support.base, 'run_command', return_value=result) as run, \
                 patch.object(support.base, 'show_details'), contextlib.redirect_stdout(io.StringIO()):
-            self.assertIs(case.run('Synthetic user request'), result)
+            self.assertIs(case.run(command), result)
             with self.assertRaises(RuntimeError):
-                case.run('Do not retry')
+                case.run(command)
         run.assert_called_once()
         command = run.call_args.args[0]
         self.assertEqual(command, [str(case.binary), 'run', '--pure', '--format', 'json',
@@ -373,7 +375,7 @@ class SubagentsTests(unittest.TestCase):
         self.assertTrue(all(args[args.index('--agent') + 1] == 'build' for args in runs))
         self.assertEqual(namespace['single'].before, namespace['delegated'].before)
         self.assertEqual(namespace['SINGLE_AGENTS']['build']['permission']['task'], 'deny')
-        self.assertEqual(namespace['DELEGATED_AGENTS']['build']['permission']['task']['investigator'], 'allow')
+        self.assertEqual(namespace['DELEGATED_SETTINGS']['agent']['build']['permission']['task']['investigator'], 'allow')
         self.assertIn('120 words', namespace['INVESTIGATOR']['prompt'])
 
     def test_example_fails_before_fix_and_passes_in_temporary_copy(self) -> None:

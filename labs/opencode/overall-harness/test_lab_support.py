@@ -47,9 +47,10 @@ class SupportTests(unittest.TestCase):
         reply = RunResult(0, False, .1, "", "", [
             {"type": "text", "part": {"text": "Synthetic reply"}, "sessionID": "test-session"},
         ])
+        command = [str(lab.binary), "run", "--pure", "--format", "json",
+                   "--agent", "build", "--model", lab.model, "--session", "test-session", "Recall the order"]
         with patch("lab_support.run_command", return_value=reply) as run:
-            self.assertIs(lab.run("Recall the order", session_id="test-session",
-                                 tools=False, label="same"), reply)
+            self.assertIs(lab.run(command, tools=False, label="same"), reply)
             args, kwargs = run.call_args
             self.assertEqual(args[0], ["/synthetic/opencode", "run", "--pure", "--format", "json",
                                       "--agent", "build", "--model", "course/test", "--session",
@@ -58,7 +59,7 @@ class SupportTests(unittest.TestCase):
             self.assertEqual(kwargs["cwd"], lab.project)
             self.assertEqual(kwargs["timeout"], 300)
             first_log = kwargs["event_log"]
-            lab.run("Recall the order", tools=False, label="fresh")
+            lab.run([*command[:-3], "Recall the order"], tools=False, label="fresh")
             self.assertNotIn("--session", run.call_args.args[0])
             self.assertNotEqual(first_log, run.call_args.kwargs["event_log"])
 
@@ -66,17 +67,19 @@ class SupportTests(unittest.TestCase):
         lab = self.make_lab()
         with patch("lab_support.run_command") as run:
             with self.assertRaisesRegex(RuntimeError, "disabled"):
-                lab.run("Do not send this")
+                lab.run([str(lab.binary), "run", "Do not send this"])
             run.assert_not_called()
         lab.enabled = True
         failed = RunResult(1, False, .1, "", "Synthetic error", [])
         with patch("lab_support.run_command", return_value=failed) as run:
-            self.assertIs(lab.run("Repair"), failed)
+            command = [str(lab.binary), "run", "Repair"]
+            self.assertIs(lab.run(command), failed)
             run.assert_called_once()
+            self.assertEqual(run.call_args.args[0], command)
         for events in ([], [{"type": "tool_use", "part": {"tool": "read"}}]):
             with patch("lab_support.run_command", return_value=RunResult(0, False, .1, "", "", events)):
                 with self.assertRaises(RuntimeError):
-                    lab.run("Just answer", tools=False)
+                    lab.run([str(lab.binary), "run", "Just answer"], tools=False)
 
     def test_lab_check_omits_model_credentials_and_preserves_failed_test(self) -> None:
         lab = self.make_lab()
@@ -100,7 +103,7 @@ class SupportTests(unittest.TestCase):
         reply = RunResult(0, False, .1, json.dumps(transcript), "", [])
         with patch("lab_support.run_command", return_value=reply) as run, \
                 patch("lab_support.show_messages"), contextlib.redirect_stdout(io.StringIO()):
-            saved = lab.export("test-session", label="continued")
+            saved = lab.export([str(lab.binary), "export", "test-session"], label="continued")
         self.assertEqual(run.call_args.args[0], ["/synthetic/opencode", "export", "test-session"])
         self.assertTrue(support.has_user_message(saved, "Test result first"))
         self.assertFalse(support.has_user_message(saved, "A guessed preference"))
@@ -108,7 +111,7 @@ class SupportTests(unittest.TestCase):
         with patch("lab_support.run_command", return_value=RunResult(0, False, .1, "{}", "", [])), \
                 contextlib.redirect_stdout(io.StringIO()):
             with self.assertRaisesRegex(ValueError, "messages list"):
-                lab.export("test-session", label="fresh")
+                lab.export([str(lab.binary), "export", "test-session"], label="fresh")
 
     def test_tool_display_keeps_request_output_and_unknown_state(self) -> None:
         event = {"type": "tool_use", "part": {"tool": "bash", "state": {
@@ -215,7 +218,7 @@ class SupportTests(unittest.TestCase):
         result = RunResult(0, False, .1, '{"messages": []}', "")
         with patch("lab_support.run_command", return_value=result), \
                 patch("lab_support.show_messages") as messages, contextlib.redirect_stdout(io.StringIO()):
-            self.assertEqual(lab.export("test-session", label="fresh", show=False), {"messages": []})
+            self.assertEqual(lab.export([str(lab.binary), "export", "test-session"], label="fresh", show=False), {"messages": []})
         messages.assert_not_called()
 
     def test_model_request_timeout_depends_on_provider(self) -> None:
@@ -225,8 +228,9 @@ class SupportTests(unittest.TestCase):
             with self.subTest(provider=provider), contextlib.redirect_stdout(io.StringIO()):
                 _, chat_env = write_configuration(
                     self.root, self.env, selected, provider=provider,
-                    permissions={"*": "deny"}, context_tokens=16384,
-                    output_tokens=2048, steps=12, redact=Redactor(),
+                    settings={"permission": {"*": "deny"}, "agent": {"build": {"steps": 12}}},
+                    chat_settings={"permission": {"*": "deny"}, "agent": {"build": {"permission": {"*": "deny"}}}},
+                    context_tokens=16384, output_tokens=2048, redact=Redactor(),
                 )
                 for env in (self.env, chat_env):
                     config = json.loads(Path(env["OPENCODE_CONFIG"]).read_text())
@@ -472,9 +476,56 @@ class NotebookTests(unittest.TestCase):
         cfg = json.loads((root / "opencode.json").read_text())
         self.assertEqual(cfg["provider"]["course"]["options"]["apiKey"], "{env:COURSE_API_KEY}")
         self.assertEqual(cfg["enabled_providers"], ["course"])
+        for key, value in context["OPENCODE_SETTINGS"].items():
+            self.assertEqual(cfg[key], value)
         chat = json.loads((root / "opencode-no-tools.json").read_text())
         self.assertEqual(chat["permission"], {"*": "deny"})
         self.assertEqual(chat["agent"]["build"]["permission"], {"*": "deny"})
+        for key, value in context["NO_TOOLS_SETTINGS"].items():
+            self.assertEqual(chat[key], value)
+
+    def test_visible_commands_connect_greeting_repair_history_and_export(self) -> None:
+        """Run notebook command-building cells against synthetic results only."""
+        cells = {c["id"]: "".join(c["source"]) for c in self.notebook["cells"]}
+        lab = Mock(binary=Path("/synthetic/opencode"), model="course/synthetic", redact=Redactor())
+        replies = [RunResult(0, False, .1, "", "", [{"sessionID": sid}])
+                   for sid in ("hello", "repair", "repair", "fresh")]
+        lab.run.side_effect = replies
+        instruction = "For this session, put the test result before the explanation of the fix."
+        lab.export.side_effect = [
+            {"messages": [{"info": {"role": "user"}, "parts": [{"type": "text", "text": instruction}]}]},
+            {"messages": []},
+        ]
+        state = {"lab": lab, "support": support}
+        with patch.object(support, "show_session_comparison"), contextlib.redirect_stdout(io.StringIO()):
+            for name in ("hello", "repair", "session-comparison", "session-export"):
+                exec(compile(cells[name], name, "exec"), state)
+        base_command = [str(lab.binary), "run", "--pure", "--format", "json",
+                        "--agent", "build", "--model", lab.model]
+        calls = lab.run.call_args_list
+        self.assertEqual(calls[0].args[0], [*base_command, state["hello_prompt"]])
+        self.assertEqual(calls[1].args[0], [*base_command, state["repair_prompt"]])
+        self.assertEqual(calls[2].args[0], [*base_command, "--session", "repair", state["history_question"]])
+        self.assertEqual(calls[3].args[0], [*base_command, state["history_question"]])
+        for index in (0, 2, 3):
+            self.assertFalse(calls[index].kwargs["tools"])
+        self.assertEqual(lab.export.call_args_list[0].args[0], [str(lab.binary), "export", "repair"])
+        self.assertEqual(lab.export.call_args_list[1].args[0], [str(lab.binary), "export", "fresh"])
+
+    def test_notebook_bash_excerpt_uses_only_an_observed_action(self) -> None:
+        source = next("".join(c["source"]) for c in self.notebook["cells"] if c["id"] == "tool-actions")
+        action = {"tool": "bash", "state": {"status": "completed", "input": {"command": "test"},
+                                              "output": "Synthetic failing test"}}
+        for events in ([], [{"type": "tool_use", "part": action}]):
+            state = {"support": support, "repair": RunResult(0, False, .1, "", "", events)}
+            with patch.object(support, "show_tool_event") as excerpt, \
+                    patch.object(support, "show_tool_actions"), contextlib.redirect_stdout(io.StringIO()) as out:
+                exec(source, state)
+            if events:
+                excerpt.assert_called_once_with({"part": action}, title="One recorded bash action", opened=True)
+            else:
+                excerpt.assert_not_called()
+                self.assertIn("No bash action was recorded", out.getvalue())
 
     def test_backend_selection_and_disabled_calls(self) -> None:
         source = next("".join(c["source"]) for c in self.notebook["cells"]
@@ -495,7 +546,7 @@ class NotebookTests(unittest.TestCase):
         lab = support.Lab(root, {}, Path("/synthetic/opencode"), root, root, "1.18.34")
         with patch("lab_support.credential") as key, patch("lab_support.start_ollama") as ollama:
             with self.assertRaisesRegex(RuntimeError, "disabled"):
-                lab.configure("deepseek", context["BACKENDS"], permissions={}, enabled=False)
+                lab.configure("deepseek", context["BACKENDS"], settings={}, chat_settings={}, enabled=False)
         key.assert_not_called()
         ollama.assert_not_called()
         self.assertFalse(lab.enabled)
