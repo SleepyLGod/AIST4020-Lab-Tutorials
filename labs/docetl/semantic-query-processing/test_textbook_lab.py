@@ -1,6 +1,5 @@
 """Offline checks for the native DocETL review lab; no model requests."""
 import ast
-import base64
 import copy
 from contextlib import contextmanager, redirect_stdout
 import hashlib
@@ -116,7 +115,7 @@ class ArtifactTests(unittest.TestCase):
         markdown = '\n'.join(''.join(c['source']) for c in NOTEBOOK['cells']
                              if c['cell_type'] == 'markdown')
         self.assertEqual([line for line in markdown.splitlines() if line.startswith('## ')], [
-            '## Part 1: Load the Review Data',
+            '## Part 1: Setup and Load the Review Data',
             '## Part 2: Semantic Operators and Queries',
             '## Part 3: Query Optimization with MOAR',
         ])
@@ -127,6 +126,18 @@ class ArtifactTests(unittest.TestCase):
         self.assertNotIn('RUN_COMPLETE_QUERY', code)
         self.assertIn('results = query.collect()', CELLS['textbook-18'])
         self.assertIn('removes this field', CELLS['textbook-09'])
+
+    def test_reading_order_and_single_rewritten_query(self) -> None:
+        ids = [cell['id'] for cell in NOTEBOOK['cells']]
+        sequence = ['textbook-04', 'textbook-05', 'textbook-02', 'textbook-06',
+                    'textbook-03', 'semantic-operators-intro', 'textbook-20',
+                    'textbook-22', 'textbook-23', 'query-plan-diagram',
+                    'fusion-explanation', 'textbook-25', 'textbook-26', 'query-measurements']
+        self.assertEqual([ids.index(i) for i in sequence], sorted(ids.index(i) for i in sequence))
+        code = '\n'.join(''.join(c['source']) for c in NOTEBOOK['cells'] if c['cell_type'] == 'code')
+        self.assertEqual(code.count('optimized_query ='), 1)
+        self.assertNotIn('fused-filter-code', ids)
+        self.assertIn('.code_filter(**code_filter)', code)
 
     def test_source_records(self) -> None:
         provenance = json.loads((ROOT / 'textbook_data/provenance.json').read_text())
@@ -149,13 +160,20 @@ class ArtifactTests(unittest.TestCase):
             r"labs/docetl/semantic-query-processing/textbook_lab_setup\.zip'",
         )
 
-    def test_static_image_embedded_and_exportable(self) -> None:
+    def test_static_image_uses_https_and_matches_local_asset(self) -> None:
         from nbconvert import HTMLExporter
         cell = next(c for c in NOTEBOOK['cells'] if c['id'] == 'query-plan-diagram')
-        raw = base64.b64decode(cell['attachments']['query-plans.png']['image/png'])
+        image_path = ROOT / 'assets/query-plans-7203785940d1.png'
+        raw = image_path.read_bytes()
         self.assertTrue(raw.startswith(b'\x89PNG\r\n\x1a\n'))
+        self.assertTrue(hashlib.sha256(raw).hexdigest().startswith('7203785940d1'))
+        self.assertNotIn('attachments', cell)
+        url = ('https://raw.githubusercontent.com/SleepyLGod/AIST4020-Lab-Tutorials/'
+               '260fb0bc4f49630d25dbc27cd6b1db9784de701c/'
+               'labs/docetl/semantic-query-processing/assets/' + image_path.name)
+        self.assertIn(url, ''.join(cell['source']))
         rendered, _ = HTMLExporter().from_notebook_node(nbformat.reads(json.dumps(NOTEBOOK), as_version=4))
-        self.assertIn('data:image/png;base64,', rendered)
+        self.assertIn(f'src="{url}"', rendered)
         self.assertNotIn('src="attachment:', rendered)
 
     def test_actual_saved_query_and_current_logic(self) -> None:
@@ -165,15 +183,14 @@ class ArtifactTests(unittest.TestCase):
         self.assertTrue(any(p.get('config', {}).get('operations') == saved['operations']
                             for p in search['plans']))
         definitions_ = definitions()
+        definitions_.update(docetl=docetl, reviews=REVIEWS, MODEL_REF=saved['model'])
         definitions_['fused_map']['model'] = saved['model']
         expected = [{k: v for k, v in op.items() if k != 'name'} for op in saved['operations']]
         expected[0]['prompt'] = expected[0]['prompt'].replace(
             'return None for the topic.', 'return the string Excluded for the topic.'
         ).replace('(Food, Service, or None).', '(Food, Service, or Excluded).')
-        actual = [
-            {'type': 'map', **definitions_['fused_map']},
-            {'type': 'code_filter', **definitions_['keep_filter']},
-        ]
+        query = assigned_query('textbook-26', 'optimized_query', definitions_)
+        actual = yaml.safe_load(query.to_yaml())['operations']
         self.assertEqual([{k: v for k, v in op.items() if k != 'name'} for op in actual], expected)
 
 
@@ -241,11 +258,23 @@ class NativeQueryTests(unittest.TestCase):
         with patch.object(MapOperation, 'execute', return_value=(synthetic, 0)) as model, \
                 redirect_stdout(self.output):
             exec(CELLS['textbook-25'], self.ns)
-            exec(CELLS['fused-filter-code'], self.ns)
-        self.assertEqual(model.call_count, 1)
+            query = assigned_query('textbook-26', 'optimized_query', self.ns)
+            selected_reviews = query.collect()
+        self.assertEqual(model.call_count, 2)
         self.assertEqual(len(self.ns['fused_reviews']), 6)
-        self.assertEqual({r['review_id'] for r in self.ns['selected_reviews']}, {'R2', 'R4', 'R5'})
-        self.assertTrue(all(r['keep'] is True for r in self.ns['selected_reviews']))
+        self.assertEqual({r['review_id'] for r in selected_reviews}, {'R2', 'R4', 'R5'})
+        self.assertTrue(all(r['keep'] is True for r in selected_reviews))
+
+    def test_walkthrough_and_comparison_use_identical_fusion_operations(self) -> None:
+        expression = next(node.value for node in ast.parse(CELLS['textbook-25']).body
+                          if isinstance(node, ast.Assign)
+                          and any(isinstance(t, ast.Name) and t.id == 'fused_reviews'
+                                  for t in node.targets))
+        walkthrough = eval(compile(ast.Expression(expression.func.value), '<query>', 'eval'), self.ns)
+        comparison = assigned_query('textbook-26', 'optimized_query', self.ns)
+        expected = yaml.safe_load(comparison.to_yaml())['operations']
+        self.assertEqual(yaml.safe_load(walkthrough.to_yaml())['operations'], expected[:1])
+        self.assertEqual(expected[1], {'type': 'code_filter', **self.ns['code_filter']})
 
     def test_reduce_groups_original_text(self) -> None:
         from docetl.operations.reduce import ReduceOperation
@@ -254,13 +283,15 @@ class NativeQueryTests(unittest.TestCase):
                                     {'type': 'reduce', **self.ns['summary_reduce']},
                                     'offline/model', 1, console=Console(file=io.StringIO()))
         with patch.object(operation, '_maybe_build_retrieval_context', return_value=''), \
-                patch.object(operation, '_batch_reduce', return_value=(
+                patch.object(operation, '_batch_reduce', side_effect=lambda *args: (
                     {'summary': 'Synthetic offline fixture'}, 'offline prompt', 0.0)) as reducer:
             results, _ = operation.execute(CORRECT)
         groups = [call.args[1] for call in reducer.call_args_list]
         self.assertEqual({frozenset(r['review_id'] for r in g) for g in groups},
                          {frozenset({'R2', 'R5'}), frozenset({'R4'})})
         self.assertEqual(len(results), 2)
+        self.assertEqual(sorted(row['_counts_prereduce_summarize_topics'] for row in results),
+                         [1, 2])
 
     def test_comparison_rebuilds_frames_and_times_only_collect(self) -> None:
         observed = []
