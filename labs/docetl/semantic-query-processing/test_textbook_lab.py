@@ -27,7 +27,7 @@ NOTEBOOK = json.loads((ROOT / 'semantic_query_processing.ipynb').read_text())
 CELLS = {c['id']: ''.join(c['source']) for c in NOTEBOOK['cells']}
 REVIEWS = json.loads((ROOT / 'textbook_data/reviews.json').read_text())
 REFERENCE = json.loads((ROOT / 'textbook_data/reference.json').read_text())
-CORRECT = [dict(row, topic=REFERENCE[row['review_id']]) for row in REVIEWS
+CORRECT = [dict(row, complaint=REFERENCE[row['review_id']]) for row in REVIEWS
            if REFERENCE[row['review_id']]]
 
 
@@ -51,6 +51,11 @@ def assigned_query(cell_id: str, name: str, namespace: dict) -> object:
     return namespace[name]
 
 
+def archived_search_code() -> str:
+    """Read the disabled optional example without enabling it in the notebook."""
+    return CELLS['textbook-28'].split('```python\n', 1)[1].split('\n```', 1)[0]
+
+
 @contextmanager
 def fixture_directory() -> Iterator[str]:
     """Keep temporary test artifacts available for inspection."""
@@ -66,38 +71,43 @@ class ScoringTests(unittest.TestCase):
 
     def test_missing_and_wrongly_retained(self) -> None:
         self.assertEqual(self.score(CORRECT[:-1], REFERENCE)['correct'].sum(), 5)
-        self.assertEqual(self.score(CORRECT + [{'review_id': 'R1', 'topic': 'Food'}],
+        self.assertEqual(self.score(CORRECT + [{'review_id': 'R1', 'complaint': 'Food'}],
                                     REFERENCE)['correct'].sum(), 5)
 
     def test_empty_is_scored(self) -> None:
         self.assertEqual(self.score([], REFERENCE)['correct'].sum(), 3)
 
-    def test_swapped_topics_do_not_hide_errors(self) -> None:
+    def test_swapped_classes_do_not_hide_errors(self) -> None:
         swapped = copy.deepcopy(CORRECT)
-        swapped[0]['topic'], swapped[1]['topic'] = swapped[1]['topic'], swapped[0]['topic']
+        swapped[0]['complaint'], swapped[1]['complaint'] = swapped[1]['complaint'], swapped[0]['complaint']
         self.assertEqual(self.score(swapped, REFERENCE)['correct'].sum(), 4)
 
     def test_long_or_missing_labels_are_wrong_not_repaired(self) -> None:
         for label in ['Food for food taste or cooking', 'food', '', None, ['Food']]:
             rows = copy.deepcopy(CORRECT)
-            rows[0]['topic'] = label
+            rows[0]['complaint'] = label
             before = copy.deepcopy(rows)
             self.assertEqual(self.score(rows, REFERENCE)['correct'].sum(), 5)
             self.assertEqual(rows, before)
         rows = copy.deepcopy(CORRECT)
-        rows[0].pop('topic')
+        rows[0].pop('complaint')
         self.assertEqual(self.score(rows, REFERENCE)['correct'].sum(), 5)
 
     def test_retained_excluded_or_null_label_is_not_exclusion(self) -> None:
         for label in ['Excluded', None]:
-            rows = CORRECT + [{'review_id': 'R1', 'topic': label}]
+            rows = CORRECT + [{'review_id': 'R1', 'complaint': label}]
             result = self.score(rows, REFERENCE).set_index('review_id')
             self.assertFalse(result.loc['R1', 'correct'])
 
     def test_duplicate_and_unknown_ids_do_not_get_silently_indexed(self) -> None:
-        for rows in [CORRECT + CORRECT[:1], [{'review_id': 'R7', 'topic': 'Food'}]]:
+        for rows in [CORRECT + CORRECT[:1], [{'review_id': 'R7', 'complaint': 'Food'}]]:
             with self.assertRaises(ValueError):
                 self.score(rows, REFERENCE)
+
+    def test_misspelled_field_is_not_a_correct_classification(self) -> None:
+        rows = [dict(review_id=row['review_id'], compliant=row['complaint']) for row in CORRECT]
+        self.assertEqual(self.score(rows, REFERENCE)['correct'].sum(), 3)
+        self.assertEqual(set(definitions()['fused_map']['output']['schema']), {'keep', 'complaint'})
 
 
 class ArtifactTests(unittest.TestCase):
@@ -132,12 +142,14 @@ class ArtifactTests(unittest.TestCase):
         sequence = ['textbook-04', 'textbook-05', 'textbook-02', 'textbook-06',
                     'textbook-03', 'semantic-operators-intro', 'textbook-20',
                     'textbook-22', 'textbook-23', 'query-plan-diagram',
-                    'fusion-explanation', 'textbook-25', 'textbook-26', 'query-measurements']
+                    'textbook-25', 'textbook-26', 'query-measurements']
         self.assertEqual([ids.index(i) for i in sequence], sorted(ids.index(i) for i in sequence))
         code = '\n'.join(''.join(c['source']) for c in NOTEBOOK['cells'] if c['cell_type'] == 'code')
         self.assertEqual(code.count('optimized_query ='), 1)
         self.assertNotIn('fused-filter-code', ids)
         self.assertIn('.code_filter(**code_filter)', code)
+        self.assertNotIn('fused_reviews', code)
+        self.assertNotIn('RUN_MOAR', code)
 
     def test_source_records(self) -> None:
         provenance = json.loads((ROOT / 'textbook_data/provenance.json').read_text())
@@ -160,16 +172,16 @@ class ArtifactTests(unittest.TestCase):
             r"labs/docetl/semantic-query-processing/textbook_lab_setup\.zip'",
         )
 
-    def test_static_image_uses_https_and_matches_local_asset(self) -> None:
+    def test_static_image_matches_updated_local_asset(self) -> None:
         from nbconvert import HTMLExporter
         cell = next(c for c in NOTEBOOK['cells'] if c['id'] == 'query-plan-diagram')
-        image_path = ROOT / 'assets/query-plans-7203785940d1.png'
+        image_path = ROOT / 'assets/query-plans-complaint.png'
         raw = image_path.read_bytes()
         self.assertTrue(raw.startswith(b'\x89PNG\r\n\x1a\n'))
-        self.assertTrue(hashlib.sha256(raw).hexdigest().startswith('7203785940d1'))
+        self.assertIn(b'map returns keep and complaint', raw)
         self.assertNotIn('attachments', cell)
         url = ('https://raw.githubusercontent.com/SleepyLGod/AIST4020-Lab-Tutorials/'
-               '260fb0bc4f49630d25dbc27cd6b1db9784de701c/'
+               'bacaeddef3aa8790cd3bd6dd3effcce8dc2c5955/'
                'labs/docetl/semantic-query-processing/assets/' + image_path.name)
         self.assertIn(url, ''.join(cell['source']))
         rendered, _ = HTMLExporter().from_notebook_node(nbformat.reads(json.dumps(NOTEBOOK), as_version=4))
@@ -189,6 +201,10 @@ class ArtifactTests(unittest.TestCase):
         expected[0]['prompt'] = expected[0]['prompt'].replace(
             'return None for the topic.', 'return the string Excluded for the topic.'
         ).replace('(Food, Service, or None).', '(Food, Service, or Excluded).')
+        expected[0]['prompt'] = expected[0]['prompt'].replace(
+            'for the topic.', 'for the complaint.'
+        ).replace("'topic'", "'complaint'")
+        expected[0]['output']['schema']['complaint'] = expected[0]['output']['schema'].pop('topic')
         # The lesson uses the default temperature and requires the keep field.
         expected[0]['litellm_completion_kwargs'].pop('temperature')
         expected[1]['code'] = expected[1]['code'].replace(
@@ -217,7 +233,7 @@ class NativeQueryTests(unittest.TestCase):
         original_ops = yaml.safe_load(original.to_yaml())['operations']
         self.assertEqual([op['type'] for op in full_ops], ['filter', 'map', 'reduce'])
         self.assertEqual(original_ops, full_ops[:2])
-        self.assertEqual(full_ops[-1]['reduce_key'], 'topic')
+        self.assertEqual(full_ops[-1]['reduce_key'], 'complaint')
 
     def test_filter_consumes_the_boolean_decision(self) -> None:
         from docetl.operations.filter import FilterOperation
@@ -238,7 +254,7 @@ class NativeQueryTests(unittest.TestCase):
         for name in ['review_filter', 'classify_map']:
             prompt = templates.from_string(self.ns[name]['prompt']).render(input=r4)
             self.assertIn(r4['text'], prompt)
-        group = [r for r in CORRECT if r['topic'] == 'Food']
+        group = [r for r in CORRECT if r['complaint'] == 'Food']
         prompt = templates.from_string(self.ns['summary_reduce']['prompt']).render(inputs=group)
         self.assertTrue(all(r['text'] in prompt for r in group))
         self.assertNotIn(r4['text'], prompt)
@@ -248,7 +264,7 @@ class NativeQueryTests(unittest.TestCase):
         from docetl.operations.map import MapOperation
         from docetl.operations.reduce import ReduceOperation
         rows = copy.deepcopy(CORRECT)
-        rows[0]['topic'] = 'Food for food taste or cooking'
+        rows[0]['complaint'] = 'Food for food taste or cooking'
         with patch.object(FilterOperation, 'execute', return_value=(CORRECT, 0)), \
                 patch.object(MapOperation, 'execute', return_value=(rows, 0)), \
                 patch.object(ReduceOperation, 'execute', return_value=([], 0)) as reduce, \
@@ -256,19 +272,21 @@ class NativeQueryTests(unittest.TestCase):
             exec(CELLS['textbook-18'], self.ns)
         self.assertEqual(reduce.call_args.args[0], rows)
 
-    def test_fusion_walkthrough_preserves_keep_and_uses_real_code_filter(self) -> None:
+    def test_fusion_runs_once_and_uses_real_code_filter(self) -> None:
         from docetl.operations.map import MapOperation
         synthetic = [dict(row, keep=REFERENCE[row['review_id']] is not None,
-                          topic=REFERENCE[row['review_id']] or 'Excluded') for row in REVIEWS]
+                          complaint=REFERENCE[row['review_id']] or 'Excluded') for row in REVIEWS]
         with patch.object(MapOperation, 'execute', return_value=(synthetic, 0)) as model, \
                 redirect_stdout(self.output):
             exec(CELLS['textbook-25'], self.ns)
+            model.assert_not_called()
             query = assigned_query('textbook-26', 'optimized_query', self.ns)
             selected_reviews = query.collect()
-        self.assertEqual(model.call_count, 2)
-        self.assertEqual(len(self.ns['fused_reviews']), 6)
+        self.assertEqual(model.call_count, 1)
+        self.assertNotIn('fused_reviews', self.ns)
         self.assertEqual({r['review_id'] for r in selected_reviews}, {'R2', 'R4', 'R5'})
         self.assertTrue(all(r['keep'] is True for r in selected_reviews))
+        self.assertEqual(self.ns['score_reviews'](selected_reviews, REFERENCE)['correct'].sum(), 6)
 
     def test_code_filter_requires_an_explicit_keep_decision(self) -> None:
         namespace = {}
@@ -279,15 +297,10 @@ class NativeQueryTests(unittest.TestCase):
         with self.assertRaises(KeyError):
             transform({'review_id': 'R1'})
 
-    def test_walkthrough_and_comparison_use_identical_fusion_operations(self) -> None:
-        expression = next(node.value for node in ast.parse(CELLS['textbook-25']).body
-                          if isinstance(node, ast.Assign)
-                          and any(isinstance(t, ast.Name) and t.id == 'fused_reviews'
-                                  for t in node.targets))
-        walkthrough = eval(compile(ast.Expression(expression.func.value), '<query>', 'eval'), self.ns)
+    def test_comparison_uses_visible_fusion_configurations(self) -> None:
         comparison = assigned_query('textbook-26', 'optimized_query', self.ns)
         expected = yaml.safe_load(comparison.to_yaml())['operations']
-        self.assertEqual(yaml.safe_load(walkthrough.to_yaml())['operations'], expected[:1])
+        self.assertEqual(expected[0], {'type': 'map', **self.ns['fused_map']})
         self.assertEqual(expected[1], {'type': 'code_filter', **self.ns['code_filter']})
 
     def test_reduce_groups_original_text(self) -> None:
@@ -304,7 +317,7 @@ class NativeQueryTests(unittest.TestCase):
         self.assertEqual({frozenset(r['review_id'] for r in g) for g in groups},
                          {frozenset({'R2', 'R5'}), frozenset({'R4'})})
         self.assertEqual(len(results), 2)
-        self.assertEqual(sorted(row['_counts_prereduce_summarize_topics'] for row in results),
+        self.assertEqual(sorted(row['_counts_prereduce_complaint_summary'] for row in results),
                          [1, 2])
 
     def test_comparison_rebuilds_frames_and_times_only_collect(self) -> None:
@@ -352,12 +365,26 @@ class NativeQueryTests(unittest.TestCase):
 
 
 class OptimizationTests(unittest.TestCase):
+    def test_optional_search_is_commented_out_not_rendered_or_executable(self) -> None:
+        from bs4 import BeautifulSoup, Comment
+        from nbconvert import HTMLExporter
+        cell = next(c for c in NOTEBOOK['cells'] if c['id'] == 'textbook-28')
+        self.assertEqual(cell['cell_type'], 'markdown')
+        self.assertTrue(CELLS['textbook-28'].startswith('<!--\n'))
+        ast.parse(archived_search_code())
+        rendered, _ = HTMLExporter().from_notebook_node(nbformat.reads(json.dumps(NOTEBOOK), as_version=4))
+        soup = BeautifulSoup(rendered, 'html.parser')
+        visible = ' '.join(str(s) for s in soup.find_all(string=True)
+                           if not isinstance(s, Comment) and s.parent.name not in {'script', 'style'})
+        self.assertNotIn('Optional: run MOAR yourself', visible)
+        self.assertNotIn('RUN_MOAR', visible)
+
     def test_optional_off_never_enters_context(self) -> None:
         context = unittest.mock.Mock(side_effect=AssertionError('Search must remain off'))
-        exec(CELLS['textbook-28'], {'lesson': SimpleNamespace(optimization_environment=context)})
+        exec(archived_search_code(), {'lesson': SimpleNamespace(optimization_environment=context)})
         context.assert_not_called()
 
-    def test_visible_optimize_receives_visible_evaluator(self) -> None:
+    def test_archived_optimize_receives_visible_evaluator(self) -> None:
         with fixture_directory() as folder:
             path = Path(folder) / 'output.json'
             path.write_text(json.dumps(CORRECT))
@@ -374,7 +401,7 @@ class OptimizationTests(unittest.TestCase):
                       lesson=SimpleNamespace(optimization_environment=environment),
                       docetl=SimpleNamespace(Frame=SimpleNamespace(from_yaml=lambda path: query)))
             with redirect_stdout(io.StringIO()):
-                exec(CELLS['textbook-28'].replace('RUN_MOAR = False', 'RUN_MOAR = True'), ns)
+                exec(archived_search_code().replace('RUN_MOAR = False', 'RUN_MOAR = True'), ns)
             args = query.optimize.call_args.kwargs
             self.assertEqual(args['models'], ['offline/model'])
             self.assertEqual(args['agent_model'], 'offline/model')
